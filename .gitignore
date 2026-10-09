@@ -1,0 +1,60 @@
+# Local assignment, planning, and reference material
+*.md
+!README.md
+/docs/
+/documentation/
+/reference video/
+/references/
+/_bmad/
+/_bmad-output/
+/.agents/
+/.omp/
+/asset-source/
+
+# Approved web assets ship; authoring archives stay local
+/public/assets/video/4k/
+/public/assets/video/*-review.mp4
+/public/assets/video/*.png
+/public/assets/video/manifest.json
+/public/assets/manifest.json
+/public/assets/fonts/*.ttf
+/public/assets/fonts/sources.json
+
+# Dependencies and generated build/test output
+node_modules/
+dist/
+build/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+.runtime-public/
+
+# Local credentials and environment overrides; commit sanitized examples only
+.env
+.env.*
+!.env.example
+.runtimeconfig.json
+*.pem
+*.key
+*service-account*.json
+*serviceAccount*.json
+.secret.local
+.secret.*
+!.secret.example
+
+# Firebase local caches and emulator output
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+database-debug.log*
+ui-debug.log*
+pubsub-debug.log*
+storage-debug.log*
+
+# Editor and operating-system noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

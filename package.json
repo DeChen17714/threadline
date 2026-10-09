@@ -1,0 +1,71 @@
+{
+  "name": "threadline",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "functions"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "npm run build:shared && npm run stage:assets && vite --mode demo",
+    "dev:emulator": "npm run build:shared && npm run stage:assets && vite --mode emulator --host 127.0.0.1 --port 5174",
+    "emulators:auth": "firebase emulators:start --only auth --project demo-threadline",
+    "emulators": "npm run build:functions && firebase emulators:start --only auth,firestore,functions --project demo-threadline",
+    "setup:local-ai": "npm run build:functions && node scripts/setup-local-ai.mjs",
+    "test:setup-local-ai": "npm run build:functions && node --experimental-strip-types --test scripts/setup-local-ai.test.mjs",
+    "test:auth-emulator": "node --experimental-strip-types --experimental-test-module-mocks --test scripts/auth-emulator.test.mjs scripts/auth-link-emulator.test.mjs",
+    "test:auth-routing": "node --test scripts/auth-routing.test.mjs",
+    "test:rooms-emulator": "node --experimental-strip-types --test scripts/rooms-emulator.test.mjs scripts/server-policy.test.mjs",
+    "test:server-policy": "npm run build:functions && node --test scripts/server-policy.test.mjs",
+    "test:invitations-emulator": "node --experimental-strip-types --test scripts/invitations-emulator.test.mjs scripts/invite-intent.test.mjs",
+    "test:deletion-emulator": "node --experimental-strip-types --test scripts/deletion-emulator.test.mjs",
+    "test:messages-emulator": "node --experimental-strip-types --test scripts/messages-emulator.test.mjs",
+    "test:history-emulator": "node --experimental-strip-types --test scripts/history-emulator.test.mjs",
+    "test:ai-emulator": "npm run build:functions && node --experimental-strip-types --test scripts/ai-emulator.test.mjs",
+    "test:conversation-revocation": "node --experimental-strip-types --experimental-test-module-mocks --test scripts/conversation-revocation.test.mjs",
+    "test:ai-client": "node --experimental-strip-types --experimental-test-module-mocks --test scripts/ai-client.test.mjs",
+    "test:message-mutations-emulator": "npm run build:functions && node --test scripts/message-mutations-emulator.test.mjs",
+    "build:functions": "npm run build:shared && npm --workspace @threadline/functions run build",
+    "build": "npm run build:functions && npm run stage:assets && tsc -b && vite build",
+    "build:demo": "npm run build:shared && npm run stage:assets && tsc -b && vite build --mode demo",
+    "typecheck": "npm run build:shared && tsc -b",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "build:shared": "npm --workspace @threadline/shared run build",
+    "stage:assets": "node scripts/stage-runtime-assets.mjs"
+  },
+  "dependencies": {
+    "@emotion/react": "11.14.0",
+    "@emotion/styled": "11.14.1",
+    "@mui/icons-material": "6.5.0",
+    "@mui/material": "6.5.0",
+    "@threadline/shared": "0.0.0",
+    "firebase": "12.19.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "eslint": "10.12.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.7",
+    "globals": "17.13.0",
+    "typescript": "6.0.2",
+    "typescript-eslint": "8.71.1",
+    "vite": "8.3.3"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.13.6",
+    "uuid": "11.1.1"
+  }
+}

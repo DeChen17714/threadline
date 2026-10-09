@@ -1,0 +1,70 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Universal deny for client writes. All mutations must occur via server callable commands.
+    match /{document=**} {
+      allow write: if false;
+    }
+
+    function isAuthenticated() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function isRoomActiveAndMember(roomData) {
+      return isAuthenticated()
+        && roomData.state == 'active'
+        && request.auth.uid in roomData.memberIds;
+    }
+
+    // Rooms: member-only reads when room is active.
+    match /rooms/{roomId} {
+      allow get, list: if isRoomActiveAndMember(resource.data);
+
+      // Subcollections: messages and generations (read-only for active room members)
+      match /{subcollection}/{docId} {
+        allow get, list: if isAuthenticated()
+          && subcollection in ['messages', 'generations']
+          && isRoomActiveAndMember(get(/databases/$(database)/documents/rooms/$(roomId)).data);
+      }
+    }
+
+    // Explicitly deny client access to all server-private collections
+    match /receipts/{receiptId} {
+      allow read, write: if false;
+    }
+
+    match /invites/{inviteId} {
+      allow read, write: if false;
+    }
+
+    match /maintenanceJobs/{jobId} {
+      allow read, write: if false;
+    }
+
+    match /budgets/{budgetId} {
+      allow read, write: if false;
+    }
+
+    match /quotaBuckets/{bucketId} {
+      allow read, write: if false;
+    }
+
+    match /reservations/{reservationId} {
+      allow read, write: if false;
+    }
+
+    match /joinRequests/{requestId} {
+      allow read, write: if false;
+    }
+
+    match /responseReports/{reportId} {
+      allow read, write: if false;
+    }
+
+    // Default deny all other documents
+    match /{allOther=**} {
+      allow read, write: if false;
+    }
+  }
+}

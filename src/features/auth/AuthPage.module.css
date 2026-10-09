@@ -1,0 +1,373 @@
+.authPage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  min-height: 100%;
+  padding: clamp(32px, 7vw, 112px);
+  background: #191B1A;
+  color: #FFFDFA;
+}
+
+.identityContent {
+  width: min(100%, 460px);
+  margin-inline: auto;
+}
+
+.identityLogo {
+  display: block;
+  width: min(100%, 210px);
+  height: auto;
+}
+
+.identityCopy {
+  margin-top: clamp(64px, 12vh, 140px);
+}
+
+.eyebrow {
+  margin: 0 0 16px;
+  color: #F4B58B;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.identityHeading {
+  max-width: 420px;
+  margin: 0;
+  color: #FFFDFA;
+  font-size: clamp(36px, 3.8vw, 54px);
+  line-height: 1.15;
+  font-family: "Bricolage Grotesque", sans-serif;
+  font-weight: 700;
+}
+
+.identityDescription {
+  max-width: 380px;
+  margin: 20px 0 0;
+  color: #BBBEB6;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.formSurface {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: clamp(24px, 4vw, 32px);
+  background: #F6F3ED;
+  overflow-y: auto;
+}
+
+.formCard {
+  width: min(100%, 420px);
+  margin-block: auto;
+  padding: clamp(28px, 4vw, 40px);
+  border: 1px solid #DADDD5;
+  border-radius: 12px;
+  background: #FFFDFA;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.08);
+}
+
+.mobileLogo {
+  display: none;
+}
+
+.homeLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin: -10px 0 16px -10px;
+  padding: 10px;
+  color: #626961;
+  font-size: 14px;
+  text-decoration: none;
+  border-radius: 6px;
+}
+
+.homeLink:hover {
+  color: #252A27;
+  text-decoration: underline;
+}
+
+.homeLink:focus-visible {
+  outline: 2px solid #252A27;
+  outline-offset: 2px;
+}
+
+.formTitle {
+  margin: 0;
+  color: #252A27;
+  font-family: "Bricolage Grotesque", sans-serif;
+  font-weight: 700;
+  font-size: clamp(28px, 3.5vw, 36px);
+  line-height: 1.15;
+}
+
+.formIntroduction {
+  margin: 8px 0 24px;
+  color: #626961;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+
+.form {
+  display: grid;
+  gap: 16px;
+}
+
+.form :global(.MuiOutlinedInput-root) {
+  background: #FFFDFA;
+  border-radius: 8px;
+  min-height: 44px;
+}
+
+.form :global(.MuiOutlinedInput-notchedOutline) {
+  border-color: #80867E;
+}
+
+.form :global(.MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline) {
+  border-color: #252A27;
+}
+
+.form :global(.MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline) {
+  border: 2px solid #252A27;
+}
+
+.form :global(.MuiInputLabel-root.Mui-focused) {
+  color: #252A27;
+}
+
+.providerError {
+  align-items: flex-start;
+  color: #B53B2B;
+  background-color: #FDF2F0;
+  border: 1px solid #F5C6CB;
+  border-radius: 8px;
+}
+
+.infoAlert {
+  align-items: flex-start;
+  color: #252A27;
+  background-color: #F0F4F2;
+  border: 1px solid #DADDD5;
+  border-radius: 8px;
+}
+
+.forgotPasswordRow {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -6px;
+  margin-bottom: 2px;
+}
+
+.forgotPasswordButton {
+  min-height: 44px !important;
+  padding: 4px 8px !important;
+  color: #626961 !important;
+  font-size: 13px !important;
+  text-transform: none !important;
+  border-radius: 6px !important;
+}
+
+.forgotPasswordButton:hover {
+  color: #252A27 !important;
+  text-decoration: underline !important;
+  background-color: transparent !important;
+}
+
+.forgotPasswordButton:focus-visible {
+  outline: 2px solid #252A27;
+  outline-offset: 2px;
+}
+
+.submitButton {
+  min-height: 44px !important;
+  margin-top: 4px;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  font-size: 15px !important;
+  background-color: #F4B58B !important;
+  color: #252A27 !important;
+  text-transform: none !important;
+  box-shadow: none !important;
+}
+
+.submitButton:hover:not(:disabled) {
+  background-color: #E8A376 !important;
+}
+
+.submitButton:focus-visible {
+  outline: 2px solid #252A27 !important;
+  outline-offset: 2px !important;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  margin: 18px 0;
+  gap: 12px;
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background-color: #DADDD5;
+}
+
+.dividerText {
+  color: #626961;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  text-transform: lowercase;
+}
+
+.googleButton {
+  min-height: 44px !important;
+  border-radius: 8px !important;
+  background-color: #FFFFFF !important;
+  border: 1px solid #DADDD5 !important;
+  color: #252A27 !important;
+  font-weight: 500 !important;
+  font-size: 14px !important;
+  text-transform: none !important;
+  box-shadow: none !important;
+}
+
+.googleButton:hover:not(:disabled) {
+  background-color: #F8F9FA !important;
+  border-color: #BBBEB6 !important;
+}
+
+.googleButton:focus-visible {
+  outline: 2px solid #252A27 !important;
+  outline-offset: 2px !important;
+}
+
+.googleIcon {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.modeSwitch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.modePrompt {
+  color: #626961;
+  font-size: 14px;
+}
+
+.modeSwitchButton {
+  min-height: 44px !important;
+  padding: 6px 8px !important;
+  color: #252A27 !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  text-decoration: underline !important;
+  text-underline-offset: 3px !important;
+  text-transform: none !important;
+  border-radius: 6px !important;
+}
+
+.modeSwitchButton:hover {
+  color: #191B1A !important;
+  background-color: transparent !important;
+}
+
+.modeSwitchButton:focus-visible {
+  outline: 2px solid #252A27 !important;
+  outline-offset: 2px !important;
+}
+
+.linkingContainer {
+  display: grid;
+  gap: 16px;
+}
+
+.cancelLinkButton {
+  min-height: 44px !important;
+  color: #626961 !important;
+  text-transform: none !important;
+  font-size: 14px !important;
+  border-radius: 6px !important;
+}
+
+.cancelLinkButton:hover {
+  color: #252A27 !important;
+  background-color: transparent !important;
+  text-decoration: underline;
+}
+
+.cancelLinkButton:focus-visible {
+  outline: 2px solid #252A27 !important;
+  outline-offset: 2px !important;
+}
+
+@media (max-width: 899px) {
+  .authPage {
+    display: block;
+    min-height: 100vh;
+    min-height: 100dvh;
+    background: #F6F3ED;
+  }
+
+  .identity {
+    display: none;
+  }
+
+  .formSurface {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: clamp(20px, 4vh, 32px) 20px 32px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .formCard {
+    width: min(100%, 420px);
+    margin-block: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+  }
+
+  .mobileLogo {
+    display: block;
+    width: 160px;
+    height: auto;
+    margin-bottom: 20px;
+  }
+}
+
+@media (max-width: 359px) {
+  .formSurface {
+    padding-inline: 16px;
+  }
+
+}

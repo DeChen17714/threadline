@@ -1,0 +1,440 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+  background-color: #F6F3ED;
+  font-family: "IBM Plex Sans", sans-serif;
+  color: #252A27;
+}
+
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 6px 16px;
+  background-color: #242724;
+  color: #F6F3ED;
+  border-bottom: 1px solid #414640;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.bannerHighlight {
+  color: #F4B58B;
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.bodyContainer {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 264px Desktop Sidebar */
+.sidebar {
+  width: 264px;
+  min-width: 264px;
+  max-width: 264px;
+  height: 100%;
+  background-color: #191B1A;
+  border-right: 1px solid #414640;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+/* 48px Mobile Topbar */
+.topbar {
+  display: none;
+  height: 48px;
+  min-height: 48px;
+  max-height: 48px;
+  background-color: #191B1A;
+  border-bottom: 1px solid #414640;
+  padding: 0 8px;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 5;
+  flex-shrink: 0;
+}
+
+.topbarLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.topbarTitle {
+  font-family: "Bricolage Grotesque", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: #F6F3ED;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbarActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Paper Workspace Canvas */
+.workspaceArea {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background-color: #F6F3ED;
+  position: relative;
+}
+
+.chatWrapper {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Sidebar Header */
+.sidebarHeader {
+  padding: 16px;
+  border-bottom: 1px solid #414640;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.brandRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.brandButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 4px 8px;
+  margin: -4px -8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #F6F3ED;
+  text-decoration: none;
+  font-family: "Bricolage Grotesque", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  min-height: 44px;
+}
+
+.brandButton:focus-visible {
+  outline: 2px solid #F4B58B;
+  outline-offset: 2px;
+}
+
+.homeAction {
+  min-height: 44px;
+  color: #BBBEB6;
+  font-size: 13px;
+  text-transform: none;
+  border-radius: 6px;
+  padding: 0 10px;
+}
+
+.homeAction:hover {
+  color: #F6F3ED;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.homeAction:focus-visible {
+  outline: 2px solid #F4B58B;
+  outline-offset: 2px;
+}
+
+.newRoomButton {
+  min-height: 44px;
+  border-radius: 8px;
+  background-color: #242724;
+  border: 1px solid #414640;
+  color: #FFFDFA;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: "IBM Plex Sans", sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+  width: 100%;
+}
+
+.newRoomButton:hover {
+  background-color: #2E2A27;
+  border-color: #F4B58B;
+}
+
+.newRoomButton:focus-visible {
+  outline: 2px solid #F4B58B;
+  outline-offset: 2px;
+}
+
+/* Rooms Navigation */
+.roomsSection {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 0;
+}
+
+.roomsHeader {
+  padding: 0 16px 8px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #BBBEB6;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.roomList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 44px rows */
+.roomItem {
+  min-height: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background-color: transparent;
+  border: none;
+  border-left: 3px solid transparent;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: #BBBEB6;
+  font-size: 13px;
+  font-family: "IBM Plex Sans", sans-serif;
+  transition: background-color 0.12s ease, color 0.12s ease;
+  gap: 10px;
+}
+
+.roomItem:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+  color: #F6F3ED;
+}
+
+.roomItem:focus-visible {
+  outline: 2px solid #F4B58B;
+  outline-offset: -2px;
+  z-index: 1;
+}
+
+/* Apricot Active Edge */
+.roomItemActive {
+  background-color: #2E2A27 !important;
+  border-left: 3px solid #F4B58B !important;
+  color: #FFFDFA !important;
+  font-weight: 600;
+}
+
+.roomIcon {
+  color: #80867E;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.roomItemActive .roomIcon {
+  color: #F4B58B;
+}
+
+.roomName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.emptyRoomsMsg {
+  padding: 16px;
+  font-size: 13px;
+  color: #BBBEB6;
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* Sidebar Footer: Identity + Scenario Selector */
+.sidebarFooter {
+  padding: 16px;
+  border-top: 1px solid #414640;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex-shrink: 0;
+  background-color: #191B1A;
+}
+
+.identityBox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.identityAvatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background-color: #2E2A27;
+  border: 1px solid #F4B58B;
+  color: #F4B58B;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.identityDetails {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.identityName {
+  font-size: 13px;
+  font-weight: 500;
+  color: #F6F3ED;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identityBadge {
+  font-size: 11px;
+  color: #BBBEB6;
+}
+
+.scenarioSelector {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.scenarioLabel {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #BBBEB6;
+}
+
+.scenarioSelect {
+  min-height: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background-color: #242724;
+  border: 1px solid #414640;
+  color: #F6F3ED;
+  font-size: 13px;
+  font-family: "IBM Plex Sans", sans-serif;
+  padding: 0 12px;
+  cursor: pointer;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.scenarioSelect:focus-visible {
+  outline: 2px solid #F4B58B;
+  outline-offset: 2px;
+}
+
+.scenarioSelect option {
+  background-color: #191B1A;
+  color: #F6F3ED;
+}
+
+/* Center States in Workspace */
+.centerStateCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  margin: auto;
+  max-width: 480px;
+  width: 90%;
+  padding: 40px 24px;
+  background-color: #FFFDFA;
+  border: 1px solid #DADDD5;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(37, 42, 39, 0.04);
+}
+
+.stateTitle {
+  font-family: "Bricolage Grotesque", sans-serif;
+  font-size: 24px;
+  font-weight: 700;
+  color: #252A27;
+  margin: 0 0 8px 0;
+}
+
+.stateBody {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #626961;
+  margin: 0 0 24px 0;
+}
+
+/* Responsive Rules: Breakpoint 900px */
+@media (max-width: 899.95px) {
+  .sidebar {
+    display: none;
+  }
+  .topbar {
+    display: flex;
+  }
+}
