@@ -2,12 +2,12 @@
 
 A room for good conversations. Built with Vite, React 19, TypeScript, and Material UI **v6**, powered by Firebase and Google Gemini (`gemini-3.8-flash`).
 
-## Target Deployment & Status
+## Deployment & Status
 
-- **Public Repository Target:** [`DeChen17714/threadline`](https://github.com/DeChen17714/threadline) *(authorized for public release; pending final primary release checks)*
-- **Live Production Hosting Target:** [`https://mit-app-assignment.web.app`](https://mit-app-assignment.web.app) *(publication pending; Firebase Hosting uses a global CDN, with Firestore/Functions in Singapore `asia-southeast1`)*
-- **Local Emulator & Server Suite:** Verified against isolated Firebase emulators (`demo-threadline`) and the live Google Gemini API (`gemini-3.8-flash`).
-- **Acceptance:** Real Google login/signup/recovery, contextual Gemini answers, refresh persistence, pre-join privacy, invitations, owned edit/delete and live updates passed. Published-origin and mobile-surface checks remain pending; no physical-device claim is made.
+- **Source:** [`DeChen17714/threadline`](https://github.com/DeChen17714/threadline) — public, application-only repository; clean source install/build and GitHub CI passed.
+- **Live demo:** [`https://mit-app-assignment.web.app`](https://mit-app-assignment.web.app) — Firebase-provided HTTPS and global CDN; Firestore/Functions run in Singapore `asia-southeast1`.
+- **Own-key evaluation:** the local emulator route below uses real Gemini, allows every authenticated room member and needs no real Firebase project or reviewer approval.
+- **Verified:** real Google/signup/recovery, contextual Gemini, refresh persistence, pre-join privacy, invitation/joined history, own-message edit/delete and real-time updates. The owner also verified the published site's reviewer AI, Google login with unapproved AI denial, invites and phone/narrow-window chat layout. This is functional acceptance, not a security certification.
 
 ---
 
@@ -22,6 +22,7 @@ The emulator development runner (`npm run dev:emulator`) automatically targets l
 - **Node.js:** `>=22.13.0` and **npm**
 - **Java:** `21+` *(required only by Firebase emulators; React and Cloud Functions do not require Java)*
 - **Firebase CLI:** Installed globally (`npm install -g firebase-tools`) or accessible via `npx`
+- Commands below use a POSIX shell (Linux/macOS; use WSL on Windows).
 - **Gemini API Key:** A Google Gemini API key with paid billing enabled (see [Billing & Pricing Caveats](#billing--pricing-caveats))
 
 ### Step-by-Step Setup
@@ -133,7 +134,7 @@ Threadline integrates Google Gemini via the official typed `@google/genai` serve
 
 - **Independent Billing:** Gemini API billing is distinct from Firebase credits or trial tiers. Using your own key incurs direct Gemini API charges.
 - **Reservation Model:** Each AI dispatch conservatively reserves **30,000 microUSD** against the ledger (nominal turn cost envelope is ~13,824 microUSD).
-- **Pricing Qualification:** Pinned pricing assumptions remain valid through 2027-01-01 (see [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)).
+- **Pricing Qualification:** Pinned pricing approval expires on 2027-01-01 (see [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)). The hosted currency/funds review expires on **2026-10-15 at 23:59:59 UTC**; expired qualification blocks AI until the operator verifies current funds/rates, without resetting consumption.
 - **Paid Preflight:** `setup:local-ai --ack-paid-service` executes one real token count and one short generation (`READY`) to qualify provider connectivity and billing status.
 
 ---
