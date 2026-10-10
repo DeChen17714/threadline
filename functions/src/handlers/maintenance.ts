@@ -324,6 +324,9 @@ export async function handleResumeMaintenance(
       // only finalization pass, so the parent never becomes a 201st deletion.
       const descendantQueries = [
         db.collection('invites').where('roomId', '==', roomId),
+        db.collection('submissions').where('roomId', '==', roomId),
+        db.collection('joinRequests').where('roomId', '==', roomId),
+        db.collection('joinQueues').where('roomId', '==', roomId),
         roomRef.collection('messages'),
         roomRef.collection('generations'),
       ];
@@ -344,6 +347,7 @@ export async function handleResumeMaintenance(
         if (roomSnap.exists) {
           transaction.delete(roomRef);
         }
+        transaction.delete(db.collection('joinQueues').doc(roomId));
 
         transaction.update(jobRef, {
           status: 'complete',

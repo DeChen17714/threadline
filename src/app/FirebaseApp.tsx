@@ -41,9 +41,9 @@ function AccountWorkspace({ auth, user, roomId, workspace, invitations, maintena
   return <WorkspacePage port={port} invitations={invitations} maintenance={maintenance} roomId={roomId} accountEmail={user.email ?? user.label} onSignOut={() => auth.signOut()} onSelectRoom={(id) => navigate(id ? `/rooms/${id}` : '/workspace')} onHome={() => navigate('/')} />
 }
 
-function SignedInJoin({ invitations, onReturn }: { invitations: InvitationPort; onReturn: () => void }) {
+function SignedInJoin({ invitations, uid, onReturn }: { invitations: InvitationPort; uid: string; onReturn: () => void }) {
   const token = readInviteIntent()
-  return <JoinPage port={invitations} token={token} onJoined={(roomId) => { clearInviteIntent(); navigate(`/rooms/${roomId}`, true) }} onReturn={() => { clearInviteIntent(); onReturn() }} />
+  return <JoinPage port={invitations} uid={uid} token={token} onJoined={(roomId) => { clearInviteIntent(); navigate(`/rooms/${roomId}`, true) }} onReturn={() => { clearInviteIntent(); onReturn() }} />
 }
 
 function ConnectedApp({ auth, workspace, invitations, maintenance, route, routeRevision }: { auth: AuthPort; workspace: (user: AuthUser) => WorkspacePort; invitations: (user: AuthUser) => InvitationPort; maintenance: (user: AuthUser) => MaintenancePort; route: string; routeRevision: number }) {
@@ -71,7 +71,7 @@ function ConnectedApp({ auth, workspace, invitations, maintenance, route, routeR
     return <ResetPasswordPage key={code ?? 'unsupported-action'} auth={auth} code={code} onPasswordChanged={() => navigate(loginRoute, true)} onRestart={() => navigate(recoveryRoute, true)} />
   }
   if (path === '/auth') return <AuthPage key={session.status === 'link-required' ? `link:${session.email}:${session.user?.uid ?? 'unverified'}` : 'credentials'} auth={auth} mode={url.searchParams.get('mode') === 'signup' ? 'signup' : 'login'} onModeChange={(mode) => navigate(`/auth?mode=${mode}&next=${encodeURIComponent(destination)}`)} onForgotPassword={() => navigate(recoveryRoute)} />
-  if (path === '/join' && session.status === 'signed-in' && invitePort) return <SignedInJoin key={`${session.user.uid}:${routeRevision}`} invitations={invitePort} onReturn={() => navigate('/workspace', true)} />
+  if (path === '/join' && session.status === 'signed-in' && invitePort) return <SignedInJoin key={`${session.user.uid}:${routeRevision}`} uid={session.user.uid} invitations={invitePort} onReturn={() => navigate('/workspace', true)} />
   if (privateRoute && session.status === 'signed-in' && invitePort && maintenancePort) return <AccountWorkspace key={session.user.uid} auth={auth} user={session.user} workspace={workspace} invitations={invitePort} maintenance={maintenancePort} roomId={roomMatch?.[1] ?? null} />
   return <Box component="main" sx={{ p: 8 }}><Typography variant="h2">Page not found</Typography><Button onClick={() => navigate('/workspace')}>Return to workspace</Button></Box>
 }

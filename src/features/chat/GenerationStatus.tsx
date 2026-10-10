@@ -169,6 +169,22 @@ export function GenerationStatus({ generation, onRetryAi }: GenerationStatusProp
     generation.retryIneligibleReason ??
     (generation.canRetry ? null : 'This question is not eligible to be retried.')
   const displayError = generation.canRetry ? generation.retryError : ineligibleReason
+  const isOutputWithheld = generation.errorCode === 'screening-blocked'
+  const isScreeningUnavailable = generation.errorCode === 'screening-unavailable'
+
+  const failureTitle = isOutputWithheld
+    ? 'Threadline response was withheld.'
+    : isScreeningUnavailable
+    ? 'Threadline response check is temporarily unavailable.'
+    : 'Threadline could not generate a reply.'
+
+  const failureDescription = generation.simulated
+    ? 'Simulated preview failure. You can retry generating a sample response.'
+    : isOutputWithheld
+    ? 'The generated reply could not be published. The saved question remains in the conversation.'
+    : isScreeningUnavailable
+    ? 'Safety screening is temporarily unavailable. The saved question remains in the conversation; you can retry when ready.'
+    : 'The saved question remains in the conversation. AI could not finish, or its status needs reconfirming after reconnect.'
 
   return (
     <Box
@@ -188,12 +204,12 @@ export function GenerationStatus({ generation, onRetryAi }: GenerationStatusProp
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <ErrorOutlineIcon sx={{ fontSize: 18, color: colors.error }} />
         <Typography variant="body2" sx={{ fontWeight: 600, color: colors.error }}>
-          Threadline could not generate a reply.
+          {failureTitle}
         </Typography>
       </Box>
 
       <Typography variant="caption" sx={{ color: colors.inkSecondary, fontSize: '0.8rem' }}>
-        {generation.simulated ? 'Simulated preview failure. You can retry generating a sample response.' : 'The saved question remains in the conversation. AI could not finish, or its status needs reconfirming after reconnect.'}
+        {failureDescription}
       </Typography>
 
       {displayError && (

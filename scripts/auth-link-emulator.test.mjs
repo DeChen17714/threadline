@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { initializeApp, deleteApp } from 'firebase/app'
 import * as sdk from 'firebase/auth'
+import { authOrigin } from './emulator-test-env.mjs'
 
 // Emulator IdP credentials and selected browser failures are fixtures. The
 // duplicate-logout test also delays SDK completion; it does not fake server state.
@@ -22,7 +23,7 @@ async function until(predicate) {
 async function fixture(t, popupError = null, delayedLogout = false) {
   const app = initializeApp({ apiKey: 'emulator-only', projectId: 'demo-threadline' }, randomUUID())
   const firebaseAuth = sdk.initializeAuth(app, { persistence: sdk.inMemoryPersistence })
-  sdk.connectAuthEmulator(firebaseAuth, 'http://127.0.0.1:9099', { disableWarnings: true })
+  sdk.connectAuthEmulator(firebaseAuth, authOrigin, { disableWarnings: true })
   const email = `${randomUUID()}@example.test`
   const password = randomUUID()
   const credential = sdk.GoogleAuthProvider.credential(JSON.stringify({ sub: randomUUID(), email, email_verified: false }))

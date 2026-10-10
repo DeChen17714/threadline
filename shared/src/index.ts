@@ -9,6 +9,6 @@ export interface LandingChapter {
   readonly mobilePoster: string
 }
 
-export type { Member, Room, Message, HumanMessage, AiMessage, Generation, Conversation, ReadState, MessageIntent, MessageWindow, RetryReplyInput, EditMessageInput, DeleteMessageInput } from './workspace.js'
+export type { Member, Room, Message, HumanMessage, AiMessage, Generation, GenerationErrorCode, Conversation, ReadState, MessageIntent, MessageWindow, RetryReplyInput, EditMessageInput, DeleteMessageInput } from './workspace.js'
 export { commandSchema } from './commands.js'
-export type { Command, CommandResult, OperationStatus } from './commands.js'
+export type { Command, CommandResult, OperationStatus, ModerationErrorCode, JoinStatus, JoinRequestSummary } from './commands.js'

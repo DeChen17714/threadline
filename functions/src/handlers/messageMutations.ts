@@ -2,7 +2,16 @@ import { FieldValue, type Firestore, type Transaction, type DocumentReference } 
 import type { CommandResult, OperationStatus } from '@threadline/shared';
 import { computePayloadHash } from '../utils/hash.js';
 import { createSafeAppError } from '../utils/errors.js';
-
+import type { ModerationPort } from '../moderation/provider.js';
+import {
+  SUBMISSION_LEASE_MS,
+  SCREENING_BLOCKED_MESSAGE,
+  SCREENING_UNAVAILABLE_MESSAGE,
+  executeScreening,
+  isLiveSubmission,
+  settleSubmissionFailure,
+  submissionReceiptResult,
+} from '../moderation/submissions.js';
 export interface EditMessageInput {
   readonly roomId: string;
   readonly messageId: string;
@@ -221,7 +230,8 @@ export async function handleEditMessage(
   db: Firestore,
   callerUid: string,
   requestId: string,
-  input: EditMessageInput
+  input: EditMessageInput,
+  moderation: ModerationPort
 ): Promise<CommandResult> {
   // 1. Strict input validation
   if (!UUID_REGEX.test(input.roomId) || !UUID_REGEX.test(input.messageId)) {
@@ -250,6 +260,8 @@ export async function handleEditMessage(
     );
   }
 
+  const receiptId = `${callerUid}_editMessage_${requestId}`;
+  const submissionId = receiptId;
   const canonicalPayloadHash = computePayloadHash({
     roomId: input.roomId,
     messageId: input.messageId,
@@ -257,21 +269,149 @@ export async function handleEditMessage(
     text: input.text,
   });
 
-  return await executeMessageMutation(
-    db,
-    callerUid,
-    requestId,
-    'edit',
-    input,
-    canonicalPayloadHash,
-    (transaction, messageRef, nextVersion, now) => {
-      transaction.update(messageRef, {
-        text: input.text,
-        version: nextVersion,
-        editedAt: now,
-      });
+  const finish = (result: CommandResult): CommandResult => {
+    if (result.status === 'failed') {
+      const code = result.errorCode === 'screening-blocked' ? 'screening-blocked' : 'screening-unavailable';
+      throw createSafeAppError(code, code === 'screening-blocked' ? SCREENING_BLOCKED_MESSAGE : SCREENING_UNAVAILABLE_MESSAGE, requestId, receiptId);
     }
-  );
+    return result;
+  };
+  const transact = (verdict?: 'allow' | 'block' | 'unavailable') => db.runTransaction(async (transaction) => {
+    const receiptRef = db.collection('receipts').doc(receiptId);
+    const submissionRef = db.collection('submissions').doc(submissionId);
+    const roomRef = db.collection('rooms').doc(input.roomId);
+    const messageRef = roomRef.collection('messages').doc(input.messageId);
+    const [receiptSnap, submissionSnap, roomSnap, messageSnap] = await Promise.all([
+      transaction.get(receiptRef), transaction.get(submissionRef), transaction.get(roomRef), transaction.get(messageRef),
+    ]);
+    const roomData = roomSnap.data();
+    const messageData = messageSnap.data();
+    try {
+      if (!roomData || roomData.state !== 'active' || !Array.isArray(roomData.memberIds) || !roomData.memberIds.includes(callerUid)) {
+        throw createSafeAppError('forbidden', 'Not an active member of this room', requestId, receiptId);
+      }
+      if (receiptSnap.exists) {
+        const receipt = receiptSnap.data()!;
+        if (receipt.callerUid !== callerUid || receipt.payloadHash !== canonicalPayloadHash || receipt.roomId !== input.roomId ||
+            receipt.operation !== 'editMessage' || receipt.messageId !== input.messageId) {
+          throw createSafeAppError('conflict', 'Request ID already used with different payload', requestId, receiptId);
+        }
+        return { result: submissionReceiptResult(receipt, receiptId) };
+      }
+      const sub = submissionSnap.data();
+      if (sub && (sub.callerUid !== callerUid || sub.payloadHash !== canonicalPayloadHash ||
+          sub.roomId !== input.roomId || sub.messageId !== input.messageId || sub.operation !== 'editMessage')) {
+        throw createSafeAppError('conflict', 'Invalid submission claim', requestId, receiptId);
+      }
+      if (sub || verdict !== undefined) {
+        if (!isLiveSubmission(sub, callerUid, canonicalPayloadHash)) {
+          return { result: settleSubmissionFailure(transaction, submissionSnap, receiptSnap, callerUid, canonicalPayloadHash) };
+        }
+        if (verdict === undefined) {
+          return { result: { operationId: receiptId, status: 'pending' as const, roomId: input.roomId, messageId: input.messageId } };
+        }
+        if (verdict !== 'allow') {
+          return { result: settleSubmissionFailure(transaction, submissionSnap, receiptSnap, callerUid, canonicalPayloadHash,
+            verdict === 'block' ? 'screening-blocked' : 'screening-unavailable') };
+        }
+      }
+      if (roomData.maintenanceId || roomData.activeGenerationId) {
+        throw createSafeAppError('room-busy', 'Room is busy. Keep your draft and try again when it settles.', requestId, receiptId);
+      }
+      if (!messageData) throw createSafeAppError('missing', 'Message not found', requestId, receiptId);
+      if (messageData.kind !== 'human' || messageData.authorId !== callerUid) {
+        throw createSafeAppError('forbidden', 'Only the author can edit this human message', requestId, receiptId);
+      }
+      if (messageData.deletedAt) throw createSafeAppError('conflict', 'Cannot edit a deleted message', requestId, receiptId);
+      if (!Number.isSafeInteger(messageData.version) || messageData.version < 1 || messageData.version >= Number.MAX_SAFE_INTEGER ||
+          messageData.version !== input.expectedVersion) {
+        throw createSafeAppError('conflict', 'Message version conflict', requestId, receiptId);
+      }
+      if (!Number.isSafeInteger(messageData.seq) || messageData.seq < 1 ||
+          !Number.isSafeInteger(roomData.nextSeq - 1) || roomData.nextSeq - 1 < messageData.seq) {
+        throw createSafeAppError('conflict', 'Conversation range is unavailable', requestId, receiptId);
+      }
+    } catch (error) {
+      if (verdict !== undefined && roomData?.state === 'active') {
+        settleSubmissionFailure(transaction, submissionSnap, receiptSnap, callerUid, canonicalPayloadHash);
+      }
+      return { error };
+    }
+    if (verdict === undefined) {
+      transaction.create(submissionRef, {
+        id: submissionId, operation: 'editMessage', callerUid, roomId: input.roomId, messageId: input.messageId,
+        expectedVersion: input.expectedVersion, payloadHash: canonicalPayloadHash, state: 'pending',
+        leaseExpiresAt: Date.now() + SUBMISSION_LEASE_MS, createdAt: FieldValue.serverTimestamp(),
+      });
+      return { claimed: true as const };
+    }
+    const nextVersion = messageData!.version + 1;
+    const editedSeq = messageData!.seq;
+    const highwaterSeq = roomData!.nextSeq - 1;
+    const jobId = `${callerUid}_invalidateContext_${requestId}`;
+    const jobRef = db.collection('maintenanceJobs').doc(jobId);
+    const now = FieldValue.serverTimestamp();
+
+    // Atomic update preserving previous approved text until this transaction commits
+    transaction.update(messageRef, {
+      text: input.text,
+      version: nextVersion,
+      editedAt: now,
+    });
+
+    transaction.update(roomRef, {
+      maintenanceId: jobId,
+      maintenanceState: 'updating-context',
+      updatedAt: now,
+    });
+
+    transaction.create(jobRef, {
+      operationId: jobId,
+      callerUid,
+      roomId: input.roomId,
+      messageId: input.messageId,
+      targetVersion: nextVersion,
+      mutationKind: 'edit',
+      editedSeq,
+      highwaterSeq,
+      cursorSeq: editedSeq + 1,
+      operation: 'invalidateContext',
+      status: 'pending' as OperationStatus,
+      invalidatedCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    transaction.delete(submissionRef);
+
+    transaction.set(receiptRef, {
+      operationId: receiptId,
+      callerUid,
+      operation: 'editMessage',
+      requestId,
+      roomId: input.roomId,
+      messageId: input.messageId,
+      version: nextVersion,
+      payloadHash: canonicalPayloadHash,
+      status: 'complete' as OperationStatus,
+      createdAt: now,
+    });
+
+    return { result: {
+      operationId: receiptId,
+      status: 'complete' as const,
+      roomId: input.roomId,
+      messageId: input.messageId,
+      version: nextVersion,
+    } };
+  });
+  const admission = await transact();
+  if ('error' in admission) throw admission.error;
+  if (admission.result) return finish(admission.result);
+  const screen = await executeScreening(moderation, input.text);
+  const settlement = await transact(screen.verdict);
+  if ('error' in settlement) throw settlement.error;
+  return finish(settlement.result!);
 }
 
 export async function handleDeleteMessage(

@@ -44,6 +44,12 @@ export interface AiMessage extends MessageBase {
 
 export type Message = HumanMessage | AiMessage
 
+export type GenerationErrorCode =
+  | 'timeout'
+  | 'provider-unavailable'
+  | 'screening-blocked'
+  | 'screening-unavailable'
+
 export interface Generation {
   readonly promptMessageId: string
   readonly requesterLabel: string
@@ -57,7 +63,7 @@ export interface Generation {
   readonly retryPending?: boolean
   readonly retryError?: string | null
   readonly retryUncertain?: boolean
-  readonly errorCode?: string | null
+  readonly errorCode?: GenerationErrorCode | string | null
 }
 
 export interface RetryReplyInput {

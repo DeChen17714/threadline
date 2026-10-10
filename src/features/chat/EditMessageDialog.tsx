@@ -269,7 +269,7 @@ export function EditMessageDialog({
               },
             }}
           >
-            {submitting ? 'Saving…' : uncertain ? 'Confirm saved edit' : 'Save'}
+            {submitting ? 'Checking message…' : uncertain ? 'Confirm saved edit' : 'Save'}
           </Button>
         </DialogActions>
       </form>

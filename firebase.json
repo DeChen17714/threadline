@@ -1,12 +1,22 @@
 {
   "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
   "functions": [{ "source": "functions", "codebase": "threadline", "runtime": "nodejs22", "predeploy": ["npm run build:functions"], "ignore": ["node_modules", "src", "scripts", "tsconfig.json", "*.log", ".env*", ".secret*"] }],
-  "hosting": {
-    "public": "dist",
-    "predeploy": ["npm run build"],
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**", "**/*.map", "assets/video/4k/**", "assets/video/*-review.mp4", "assets/video/*.png", "assets/fonts/*.ttf", "assets/fonts/sources.json"],
-    "rewrites": [{ "source": "**", "destination": "/index.html" }]
-  },
+  "hosting": [
+    {
+      "target": "primary",
+      "public": "dist",
+      "predeploy": ["npm run build"],
+      "ignore": ["firebase.json", "**/.*", "**/node_modules/**", "**/*.map", "assets/video/4k/**", "assets/video/*-review.mp4", "assets/video/*.png", "assets/fonts/*.ttf", "assets/fonts/sources.json"],
+      "rewrites": [{ "source": "**", "destination": "/index.html" }]
+    },
+    {
+      "target": "demo",
+      "public": "dist",
+      "predeploy": ["npm run build"],
+      "ignore": ["firebase.json", "**/.*", "**/node_modules/**", "**/*.map", "assets/video/4k/**", "assets/video/*-review.mp4", "assets/video/*.png", "assets/fonts/*.ttf", "assets/fonts/sources.json"],
+      "rewrites": [{ "source": "**", "destination": "/index.html" }]
+    }
+  ],
   "emulators": {
     "auth": { "host": "127.0.0.1", "port": 9099 },
     "firestore": { "host": "127.0.0.1", "port": 8080 },

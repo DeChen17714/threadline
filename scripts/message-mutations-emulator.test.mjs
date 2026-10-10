@@ -4,23 +4,22 @@ import { randomUUID } from 'node:crypto'
 import { initializeApp } from 'firebase-admin/app'
 import { FieldValue, getFirestore } from 'firebase-admin/firestore'
 import { initializeApp as initializeClientApp, deleteApp } from 'firebase/app'
-import { connectAuthEmulator, getAuth, signInWithEmailAndPassword } from 'firebase/auth'
-import { connectFirestoreEmulator, getFirestore as getClientFirestore, collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore'
-
-Object.assign(process.env, { FUNCTIONS_EMULATOR: 'true', GCLOUD_PROJECT: 'demo-threadline',
-  FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080', FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099', FIREBASE_EMULATOR_HUB: '127.0.0.1:4400' })
+import { getAuth, signInWithEmailAndPassword } from 'firebase/auth'
+import { getFirestore as getClientFirestore, collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore'
+import { PROJECT_ID, authSignUpUrl, connectTestAuthEmulator, connectTestFirestoreEmulator } from './emulator-test-env.mjs'
 const { handleCreateRoom } = await import('../functions/dist/handlers/createRoom.js')
 const { handleSendRoomMessage } = await import('../functions/dist/handlers/sendRoomMessage.js')
 const { handleEditMessage, handleDeleteMessage } = await import('../functions/dist/handlers/messageMutations.js')
 const { handleResumeMaintenance, handleDeleteRoom } = await import('../functions/dist/handlers/maintenance.js')
 const { handleGetOperation } = await import('../functions/dist/handlers/getOperation.js')
+const { computePayloadHash } = await import('../functions/dist/utils/hash.js')
 const { handleAskThreadline, handleRetryAiReply } = await import('../functions/dist/ai/lifecycle.js')
-const db = getFirestore(initializeApp({ projectId: 'demo-threadline' }, 'mutation-regressions'), 'mutation-regressions')
+const db = getFirestore(initializeApp({ projectId: PROJECT_ID }, 'mutation-regressions'), 'mutation-regressions')
 const credentialsByUid = new Map()
 
 async function account() {
   const credentials = { email: `${randomUUID()}@example.test`, password: randomUUID() }
-  const response = await fetch('http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signUp?key=emulator-only', {
+  const response = await fetch(authSignUpUrl, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...credentials, returnSecureToken: true }),
   })
@@ -29,6 +28,24 @@ async function account() {
   credentialsByUid.set(uid, credentials)
   return uid
 }
+function createControlledModeration({ verdict = 'allow', onScreen, failScreen } = {}) {
+  let screenCalls = 0
+  return {
+    get screenCalls() { return screenCalls },
+    async screen(text, signal) {
+      screenCalls++
+      if (onScreen) await onScreen(text, signal)
+      if (failScreen) throw failScreen
+      return {
+        verdict,
+        policyVersion: 'threadline-moderation-v1',
+        reason: verdict === 'block' ? 'policy-blocked' : null,
+      }
+    },
+  }
+}
+const defaultModeration = createControlledModeration()
+
 async function fixture() {
   const owner = await account(), member = await account(), outsider = await account()
   const { roomId } = await handleCreateRoom(db, owner, 'Owner', randomUUID(), { name: 'Synthetic mutation fixture', description: '' })
@@ -36,12 +53,11 @@ async function fixture() {
   await room.update({ memberIds: FieldValue.arrayUnion(member) })
   const messageId = randomUUID()
   const original = 'Original author text that must not appear in receipts or jobs'
-  await handleSendRoomMessage(db, owner, 'Owner', randomUUID(), { roomId, messageId, text: original })
+  await handleSendRoomMessage(db, owner, 'Owner', randomUUID(), { roomId, messageId, text: original }, defaultModeration)
   return { owner, member, outsider, roomId, room, messageId, original, message: room.collection('messages').doc(messageId) }
 }
-const edit = (f, changes = {}, caller = f.owner, requestId = randomUUID()) => handleEditMessage(db, caller, requestId,
-  { roomId: f.roomId, messageId: f.messageId, expectedVersion: 1, text: 'Revised author text', ...changes })
-
+const edit = (f, changes = {}, caller = f.owner, requestId = randomUUID(), moderation = defaultModeration) => handleEditMessage(db, caller, requestId,
+  { roomId: f.roomId, messageId: f.messageId, expectedVersion: 1, text: 'Revised author text', ...changes }, moderation)
 async function finish(f, operationId, caller = f.member) {
   for (let pass = 0; pass < 10; pass++) {
     const result = await handleResumeMaintenance(db, caller, randomUUID(), { operationId })
@@ -158,12 +174,12 @@ test('concurrent edits serialize once and context maintenance pauses new sends, 
   assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1)
   assert.equal((await f.message.get()).data().version, 2)
   await assert.rejects(handleSendRoomMessage(db, f.member, 'Member', randomUUID(),
-    { roomId: f.roomId, messageId: randomUUID(), text: 'Must wait for maintenance' }), error => error?.details?.code === 'room-busy')
+    { roomId: f.roomId, messageId: randomUUID(), text: 'Must wait for maintenance' }, defaultModeration), error => error?.details?.code === 'room-busy')
   const provider = { async count() { throw new Error('No provider work permitted') }, async generate() { throw new Error('No provider work permitted') } }
   await assert.rejects(handleAskThreadline(db, f.owner, 'Owner', randomUUID(),
-    { roomId: f.roomId, messageId: randomUUID(), text: 'Must wait for maintenance' }, { localDevelopment: true, testerUids: [] }, provider), error => error?.details?.code === 'room-busy')
+    { roomId: f.roomId, messageId: randomUUID(), text: 'Must wait for maintenance' }, { localDevelopment: true, testerUids: [] }, provider, defaultModeration), error => error?.details?.code === 'room-busy')
   await assert.rejects(handleRetryAiReply(db, f.owner, 'Owner', randomUUID(),
-    { roomId: f.roomId, promptMessageId: f.messageId, generationId: randomUUID() }, { localDevelopment: true, testerUids: [] }, provider), error => error?.details?.code === 'room-busy')
+    { roomId: f.roomId, promptMessageId: f.messageId, generationId: randomUUID() }, { localDevelopment: true, testerUids: [] }, provider, defaultModeration), error => error?.details?.code === 'room-busy')
 })
 
 test('room deletion preempts context maintenance and superseded workers cannot write transcript state', { timeout: 15000 }, async () => {
@@ -188,7 +204,7 @@ test('separate messages never reuse a maintenance fence and completed workers ca
   const f = await fixture()
   const otherMessageId = randomUUID()
   await handleSendRoomMessage(db, f.owner, 'Owner', randomUUID(),
-    { roomId: f.roomId, messageId: otherMessageId, text: 'Second owned message' })
+    { roomId: f.roomId, messageId: otherMessageId, text: 'Second owned message' }, defaultModeration)
   await edit(f)
   const oldJob = (await f.room.get()).data().maintenanceId
   await finish(f, oldJob)
@@ -285,11 +301,11 @@ test('foreign, AI, active-generation, maintenance and stale-version deletion att
 
 test('an authenticated frozen realtime window receives the command tombstone rather than evicting its identity', { timeout: 15000 }, async () => {
   const f = await fixture()
-  const app = initializeClientApp({ projectId: 'demo-threadline', apiKey: 'emulator-only', appId: 'frozen-tombstone-proof' }, `frozen-${randomUUID()}`)
+  const app = initializeClientApp({ projectId: PROJECT_ID, apiKey: 'emulator-only', appId: 'frozen-tombstone-proof' }, `frozen-${randomUUID()}`)
   const auth = getAuth(app)
-  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true })
+  connectTestAuthEmulator(auth)
   const clientDb = getClientFirestore(app, 'mutation-regressions')
-  connectFirestoreEmulator(clientDb, '127.0.0.1', 8080)
+  connectTestFirestoreEmulator(clientDb)
   const credentials = credentialsByUid.get(f.owner)
   await signInWithEmailAndPassword(auth, credentials.email, credentials.password)
   const initial = Promise.withResolvers(), updated = Promise.withResolvers()
@@ -351,4 +367,372 @@ test('deletion resumes after failure between bounded batches and a failed job is
   await assert.rejects(handleResumeMaintenance(interruptedDb, preempted.owner, randomUUID(), { operationId: failedJob }))
   await handleDeleteRoom(db, preempted.owner, randomUUID(), { roomId: preempted.roomId })
   assert.equal((await db.collection('maintenanceJobs').doc(failedJob).get()).data().status, 'cancelled')
+})
+
+test('human send moderation: blocking, unavailable, unknown/exception and zero rate-limit consumption', { timeout: 15000 }, async () => {
+  const f = await fixture()
+  const blockedMod = createControlledModeration({ verdict: 'block' })
+  const unavailableMod = createControlledModeration({ verdict: 'unavailable' })
+  const throwingMod = createControlledModeration({ failScreen: new Error('Network failure to moderation service') })
+
+  // 1. Blocked send throws screening-blocked and writes no message
+  const blockedMessageId = randomUUID()
+  await assert.rejects(
+    handleSendRoomMessage(db, f.member, 'Member', randomUUID(), { roomId: f.roomId, messageId: blockedMessageId, text: 'Harmful content' }, blockedMod),
+    error => error?.code === 'failed-precondition' && error?.details?.code === 'screening-blocked'
+  )
+  assert.equal((await f.room.collection('messages').doc(blockedMessageId).get()).exists, false)
+  assert.equal(blockedMod.screenCalls, 1)
+
+  // 2. Unavailable send throws screening-unavailable and writes no message
+  const unavailMessageId = randomUUID()
+  await assert.rejects(
+    handleSendRoomMessage(db, f.member, 'Member', randomUUID(), { roomId: f.roomId, messageId: unavailMessageId, text: 'Neutral text' }, unavailableMod),
+    error => error?.code === 'unavailable' && error?.details?.code === 'screening-unavailable'
+  )
+  assert.equal((await f.room.collection('messages').doc(unavailMessageId).get()).exists, false)
+
+  // 3. Throwing moderation treated as screening-unavailable
+  const throwingMessageId = randomUUID()
+  await assert.rejects(
+    handleSendRoomMessage(db, f.member, 'Member', randomUUID(), { roomId: f.roomId, messageId: throwingMessageId, text: 'Neutral text' }, throwingMod),
+    error => error?.code === 'unavailable' && error?.details?.code === 'screening-unavailable'
+  )
+  assert.equal((await f.room.collection('messages').doc(throwingMessageId).get()).exists, false)
+
+  // 4. Rate limit bucket was not incremented for blocked or unavailable sends
+  const bucket = (await db.collection('quotaBuckets').doc(`sendRoomMessage_${f.member}`).get()).data()
+  assert.equal(bucket?.count ?? 0, 0)
+})
+
+test('human edit moderation: blocking preserves prior text, duplicate returns pending, and expired claims fail closed', { timeout: 15000 }, async () => {
+  const f = await fixture()
+  const blockedMod = createControlledModeration({ verdict: 'block' })
+  const unavailMod = createControlledModeration({ verdict: 'unavailable' })
+
+  // 1. Blocked edit preserves prior approved text and version, creates no invalidation job
+  await assert.rejects(
+    edit(f, { text: 'Blocked replacement text' }, f.owner, randomUUID(), blockedMod),
+    error => error?.code === 'failed-precondition' && error?.details?.code === 'screening-blocked'
+  )
+  const msgAfterBlock = (await f.message.get()).data()
+  assert.equal(msgAfterBlock.text, f.original)
+  assert.equal(msgAfterBlock.version, 1)
+  assert.equal((await db.collection('maintenanceJobs').where('roomId', '==', f.roomId).get()).size, 0)
+
+  // 2. Unavailable edit preserves prior approved text
+  await assert.rejects(
+    edit(f, { text: 'Unavailable replacement text' }, f.owner, randomUUID(), unavailMod),
+    error => error?.code === 'unavailable' && error?.details?.code === 'screening-unavailable'
+  )
+  assert.equal((await f.message.get()).data().text, f.original)
+
+  // 3. Duplicate in-flight edit returns pending without second screen
+  let releaseScreen
+  const screenEntered = new Promise(resolve => { releaseScreen = resolve })
+  const slowMod = createControlledModeration({
+    onScreen: async () => {
+      await screenEntered
+    },
+  })
+  const editRequestId = randomUUID()
+  const inFlightEdit = edit(f, { text: 'Pending replacement text' }, f.owner, editRequestId, slowMod)
+
+  // Wait for submission claim to be established
+  const submissionId = `${f.owner}_editMessage_${editRequestId}`
+  let subDoc
+  for (let i = 0; i < 20; i++) {
+    subDoc = await db.collection('submissions').doc(submissionId).get()
+    if (subDoc.exists) break
+    await new Promise(r => setTimeout(r, 50))
+  }
+  assert.equal(subDoc.exists, true)
+  assert.equal(subDoc.data().state, 'pending')
+  // No raw text in submission document
+  assert.equal(JSON.stringify(subDoc.data()).includes('Pending replacement text'), false)
+
+  // Duplicate call with same requestId returns pending without second screen
+  const duplicate = await edit(f, { text: 'Pending replacement text' }, f.owner, editRequestId, slowMod)
+  assert.equal(duplicate.status, 'pending')
+  assert.equal(duplicate.operationId, submissionId)
+  assert.equal(slowMod.screenCalls, 1)
+
+  // getOperation on own pending claim returns pending without text
+  const opStatus = await handleGetOperation(db, f.owner, randomUUID(), { operationId: submissionId })
+  assert.equal(opStatus.status, 'pending')
+  assert.equal(JSON.stringify(opStatus).includes('Pending replacement text'), false)
+
+  // getOperation on pending claim by outsider throws forbidden
+  await assert.rejects(
+    handleGetOperation(db, f.outsider, randomUUID(), { operationId: submissionId }),
+    error => error?.details?.code === 'forbidden'
+  )
+
+  // Release the in-flight screening
+  releaseScreen()
+  const completedEdit = await inFlightEdit
+  assert.equal(completedEdit.status, 'complete')
+  assert.equal((await f.message.get()).data().text, 'Pending replacement text')
+  assert.equal((await f.message.get()).data().version, 2)
+
+  // 4. Crashed claim expires fail-closed, never redispatches
+  const crashedRequestId = randomUUID()
+  const crashedSubmissionId = `${f.owner}_editMessage_${crashedRequestId}`
+  // Seed a crashed submission whose lease has already expired
+  await db.collection('submissions').doc(crashedSubmissionId).set({
+    id: crashedSubmissionId,
+    operation: 'editMessage',
+    callerUid: f.owner,
+    roomId: f.roomId,
+    messageId: f.messageId,
+    expectedVersion: 2,
+    payloadHash: computePayloadHash({ roomId: f.roomId, messageId: f.messageId, expectedVersion: 2, text: 'Crashed revision retry' }),
+    state: 'pending',
+    leaseExpiresAt: Date.now() - 1000,
+  })
+
+  // getOperation marks expired claim as failed screening-unavailable
+  const expiredOp = await handleGetOperation(db, f.owner, randomUUID(), { operationId: crashedSubmissionId })
+  assert.equal(expiredOp.status, 'failed')
+  assert.equal(expiredOp.errorCode, 'screening-unavailable')
+  assert.equal((await db.collection('submissions').doc(crashedSubmissionId).get()).exists, false)
+  assert.equal((await db.collection('receipts').doc(crashedSubmissionId).get()).data().status, 'failed')
+
+  // Duplicate invocation with the crashed requestId fails closed and never reclaims
+  await assert.rejects(
+    edit(f, { expectedVersion: 2, text: 'Crashed revision retry' }, f.owner, crashedRequestId, slowMod),
+    error => error?.details?.code === 'screening-unavailable'
+  )
+})
+
+test('room deletion purges room submissions and late publication cannot revive deleted room', { timeout: 15000 }, async () => {
+  const f = await fixture()
+  const sendRequestId = randomUUID()
+  const submissionId = `${f.member}_sendRoomMessage_${sendRequestId}`
+
+  // Seed a pending submission in the room
+  await db.collection('submissions').doc(submissionId).set({
+    id: submissionId,
+    operation: 'sendRoomMessage',
+    callerUid: f.member,
+    roomId: f.roomId,
+    messageId: randomUUID(),
+    payloadHash: 'synthetic-hash',
+    state: 'pending',
+    leaseExpiresAt: Date.now() + 30000,
+  })
+
+  // Delete the room
+  await handleDeleteRoom(db, f.owner, randomUUID(), { roomId: f.roomId })
+  const jobId = `${f.owner}_deleteRoom_${f.roomId}`
+
+  // Finish room deletion maintenance passes
+  let deleteRes
+  for (let pass = 0; pass < 10; pass++) {
+    deleteRes = await handleResumeMaintenance(db, f.owner, randomUUID(), { operationId: jobId })
+    if (deleteRes.status === 'complete') break
+  }
+  assert.equal(deleteRes.status, 'complete')
+
+  // Submissions for this room were drained!
+  const drained = await db.collection('submissions').doc(submissionId).get()
+  assert.equal(drained.exists, false)
+
+  // Late send attempt cannot publish or revive room
+  await assert.rejects(
+    handleSendRoomMessage(db, f.member, 'Member', randomUUID(), { roomId: f.roomId, messageId: randomUUID(), text: 'Late send' }, defaultModeration),
+    error => error?.details?.code === 'forbidden'
+  )
+  assert.equal((await f.room.get()).exists, false)
+})
+
+for (const operation of ['sendRoomMessage', 'editMessage']) {
+  test(`${operation}: expired late allow commits terminal failure and cannot be reclaimed`, { timeout: 15000 }, async () => {
+    const f = await fixture(), requestId = randomUUID()
+    const operationId = `${f.owner}_${operation}_${requestId}`
+    const messageId = operation === 'editMessage' ? f.messageId : randomUUID()
+    const input = { roomId: f.roomId, messageId, text: 'Lease-bound approved text',
+      ...(operation === 'editMessage' ? { expectedVersion: 1 } : {}) }
+    const moderation = createControlledModeration({ onScreen: async () => {
+      await db.collection('submissions').doc(operationId).update({ leaseExpiresAt: Date.now() - 1 })
+    } })
+    const invoke = () => operation === 'editMessage'
+      ? handleEditMessage(db, f.owner, requestId, input, moderation)
+      : handleSendRoomMessage(db, f.owner, 'Owner', requestId, input, moderation)
+    await assert.rejects(invoke(), error => error?.details?.code === 'screening-unavailable')
+    assert.equal((await db.collection('receipts').doc(operationId).get()).data().status, 'failed')
+    assert.equal((await db.collection('submissions').doc(operationId).get()).exists, false)
+    await assert.rejects(invoke(), error => error?.details?.code === 'screening-unavailable')
+    assert.equal(moderation.screenCalls, 1)
+    assert.equal((await handleGetOperation(db, f.owner, randomUUID(), { operationId })).errorCode, 'screening-unavailable')
+    const message = await f.room.collection('messages').doc(messageId).get()
+    if (operation === 'editMessage') {
+      assert.equal(message.data().text, f.original)
+      assert.equal(message.data().version, 1)
+      assert.equal((await f.room.get()).data().maintenanceId ?? null, null)
+    } else assert.equal(message.exists, false)
+  })
+
+  test(`${operation}: revoked pending duplicate and status lookup are denied before replay`, { timeout: 15000 }, async () => {
+    const f = await fixture(), requestId = randomUUID()
+    const entered = Promise.withResolvers(), release = Promise.withResolvers()
+    const operationId = `${f.owner}_${operation}_${requestId}`
+    const input = { roomId: f.roomId, messageId: operation === 'editMessage' ? f.messageId : randomUUID(),
+      text: 'Must not publish after revocation', ...(operation === 'editMessage' ? { expectedVersion: 1 } : {}) }
+    const moderation = createControlledModeration({ onScreen: async () => { entered.resolve(); await release.promise } })
+    const invoke = () => operation === 'editMessage'
+      ? handleEditMessage(db, f.owner, requestId, input, moderation)
+      : handleSendRoomMessage(db, f.owner, 'Owner', requestId, input, moderation)
+    const work = invoke()
+    const rejected = assert.rejects(work, error => error?.details?.code === 'forbidden')
+    try {
+      await entered.promise
+      await f.room.update({ memberIds: FieldValue.arrayRemove(f.owner) })
+      await assert.rejects(invoke(), error => error?.details?.code === 'forbidden')
+      await assert.rejects(handleGetOperation(db, f.owner, randomUUID(), { operationId }), error => error?.details?.code === 'forbidden')
+    } finally { release.resolve() }
+    await rejected
+    assert.equal(moderation.screenCalls, 1)
+    assert.equal((await db.collection('submissions').doc(operationId).get()).exists, false)
+    if (operation === 'editMessage') assert.equal((await f.message.get()).data().version, 1)
+    else assert.equal((await f.room.collection('messages').doc(input.messageId).get()).exists, false)
+  })
+}
+
+for (const verdict of ['allow', 'block', 'unavailable']) {
+  test(`room deletion during ${verdict} screening cannot recreate private metadata or publish`, { timeout: 15000 }, async () => {
+    const f = await fixture(), requestId = randomUUID(), messageId = randomUUID()
+    const operationId = `${f.member}_sendRoomMessage_${requestId}`
+    const entered = Promise.withResolvers(), release = Promise.withResolvers()
+    const moderation = createControlledModeration({ verdict, onScreen: async () => { entered.resolve(); await release.promise } })
+    const work = handleSendRoomMessage(db, f.member, 'Member', requestId,
+      { roomId: f.roomId, messageId, text: 'Deleted while screening' }, moderation)
+    const rejected = assert.rejects(work, error => error?.details?.code === 'forbidden')
+    try {
+      await entered.promise
+      const deletion = await handleDeleteRoom(db, f.owner, randomUUID(), { roomId: f.roomId })
+      await finish(f, deletion.operationId, f.owner)
+    } finally { release.resolve() }
+    await rejected
+    assert.equal((await f.room.get()).exists, false)
+    assert.equal((await db.collection('submissions').doc(operationId).get()).exists, false)
+    assert.equal((await db.collection('receipts').doc(operationId).get()).exists, false)
+    assert.equal((await f.room.collection('messages').doc(messageId).get()).exists, false)
+  })
+}
+
+test('concurrent status queries and duplicate sends preserve one-screen durable success', { timeout: 15000 }, async () => {
+  const f = await fixture(), requestId = randomUUID()
+  const input = { roomId: f.roomId, messageId: randomUUID(), text: 'One screened publication' }
+  const operationId = `${f.member}_sendRoomMessage_${requestId}`
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const moderation = createControlledModeration({ onScreen: async () => { entered.resolve(); await release.promise } })
+  const invoke = () => handleSendRoomMessage(db, f.member, 'Member', requestId, input, moderation)
+  const work = invoke()
+  await entered.promise
+  assert.equal((await invoke()).status, 'pending')
+  const queries = Array.from({ length: 8 }, () => handleGetOperation(db, f.member, randomUUID(), { operationId }))
+  release.resolve()
+  const [accepted, ...statuses] = await Promise.all([work, ...queries])
+  assert.equal(accepted.status, 'complete')
+  assert.ok(statuses.every(result => result.status === 'pending' || result.status === 'complete'))
+  assert.equal((await invoke()).seq, accepted.seq)
+  assert.equal((await handleGetOperation(db, f.member, randomUUID(), { operationId })).status, 'complete')
+  assert.equal((await db.collection('receipts').doc(operationId).get()).data().status, 'complete')
+  assert.equal((await db.collection('submissions').doc(operationId).get()).exists, false)
+  assert.equal(moderation.screenCalls, 1)
+  assert.equal((await db.collection('quotaBuckets').doc(`sendRoomMessage_${f.member}`).get()).data().count, 1)
+})
+
+test('expired status settlement racing late publication remains failed without re-creation', { timeout: 15000 }, async () => {
+  const f = await fixture(), requestId = randomUUID(), messageId = randomUUID()
+  const operationId = `${f.member}_sendRoomMessage_${requestId}`
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const moderation = createControlledModeration({ onScreen: async () => { entered.resolve(); await release.promise } })
+  const work = handleSendRoomMessage(db, f.member, 'Member', requestId, { roomId: f.roomId, messageId, text: 'Too late' }, moderation)
+  const rejected = assert.rejects(work, error => error?.details?.code === 'screening-unavailable')
+  await entered.promise
+  await db.collection('submissions').doc(operationId).update({ leaseExpiresAt: Date.now() - 1 })
+  const status = handleGetOperation(db, f.member, randomUUID(), { operationId })
+  release.resolve()
+  await rejected
+  assert.equal((await status).status, 'failed')
+  assert.equal((await db.collection('receipts').doc(operationId).get()).data().status, 'failed')
+  assert.equal((await db.collection('submissions').doc(operationId).get()).exists, false)
+  assert.equal((await f.room.collection('messages').doc(messageId).get()).exists, false)
+})
+
+for (const mutation of ['version', 'maintenance']) {
+  test(`post-screen edit ${mutation} conflict settles once without overwriting approved text`, { timeout: 15000 }, async () => {
+    const f = await fixture(), requestId = randomUUID()
+    const operationId = `${f.owner}_editMessage_${requestId}`
+    const moderation = createControlledModeration({ onScreen: async () => {
+      if (mutation === 'version') await f.message.update({ version: 2, text: 'A different accepted edit' })
+      else await f.room.update({ maintenanceId: 'controlled-maintenance' })
+    } })
+    await assert.rejects(edit(f, {}, f.owner, requestId, moderation),
+      error => error?.details?.code === (mutation === 'version' ? 'conflict' : 'room-busy'))
+    assert.equal((await f.message.get()).data().text, mutation === 'version' ? 'A different accepted edit' : f.original)
+    assert.equal((await db.collection('submissions').doc(operationId).get()).exists, false)
+    const status = await handleGetOperation(db, f.owner, randomUUID(), { operationId })
+    assert.equal(status.status, 'failed')
+    assert.equal(status.version, undefined)
+    await assert.rejects(edit(f, {}, f.owner, requestId, moderation), error => error?.details?.code === 'screening-unavailable')
+    assert.equal(moderation.screenCalls, 1)
+  })
+}
+
+test('missing or malformed submission metadata never reports complete or admits another screen', { timeout: 15000 }, async () => {
+  const f = await fixture()
+  for (const state of ['consumed', 'unexpected', null]) {
+    const requestId = randomUUID(), operationId = `${f.owner}_sendRoomMessage_${requestId}`
+    const input = { roomId: f.roomId, messageId: randomUUID(), text: 'Unknown claim must not publish' }
+    await db.collection('submissions').doc(operationId).set({
+      id: operationId, operation: 'sendRoomMessage', callerUid: f.owner, roomId: f.roomId,
+      messageId: input.messageId, payloadHash: computePayloadHash(input), state, leaseExpiresAt: Date.now() + 30000,
+    })
+    const moderation = createControlledModeration()
+    await assert.rejects(handleGetOperation(db, f.owner, randomUUID(), { operationId }), error => error?.details?.code === 'conflict')
+    await assert.rejects(handleSendRoomMessage(db, f.owner, 'Owner', requestId, input, moderation),
+      error => error?.details?.code === 'screening-unavailable')
+    assert.equal(moderation.screenCalls, 0)
+    assert.equal((await f.room.collection('messages').doc(input.messageId).get()).exists, false)
+  }
+  const requestId = randomUUID(), operationId = `${f.owner}_sendRoomMessage_${requestId}`
+  const input = { roomId: f.roomId, messageId: randomUUID(), text: 'A claim without an expiry is unsafe' }
+  await db.collection('submissions').doc(operationId).set({
+    id: operationId, operation: 'sendRoomMessage', callerUid: f.owner, roomId: f.roomId,
+    messageId: input.messageId, payloadHash: computePayloadHash(input), state: 'pending',
+  })
+  assert.equal((await handleGetOperation(db, f.owner, randomUUID(), { operationId })).status, 'failed')
+  const moderation = createControlledModeration()
+  await assert.rejects(handleSendRoomMessage(db, f.owner, 'Owner', requestId, input, moderation),
+    error => error?.details?.code === 'screening-unavailable')
+  assert.equal(moderation.screenCalls, 0)
+  await assert.rejects(handleGetOperation(db, f.owner, randomUUID(), { operationId: randomUUID() }),
+    error => error?.details?.code === 'missing')
+})
+
+test('pending Ask and Retry operation lookups enforce current hosted allowlist before expiration', { timeout: 15000 }, async () => {
+  const f = await fixture()
+  for (const operation of ['askThreadline', 'retryAiReply']) {
+    const operationId = `${f.owner}_${operation}_${randomUUID()}`
+    const claim = db.collection('submissions').doc(operationId)
+    await claim.set({ id: operationId, operation, callerUid: f.owner, roomId: f.roomId,
+      messageId: f.messageId, payloadHash: 'controlled-private-hash', state: 'pending', leaseExpiresAt: Date.now() - 1 })
+    const emulator = process.env.FUNCTIONS_EMULATOR, testers = process.env.AI_TESTER_UIDS
+    try {
+      process.env.FUNCTIONS_EMULATOR = 'false'
+      process.env.AI_TESTER_UIDS = ''
+      await assert.rejects(handleGetOperation(db, f.owner, randomUUID(), { operationId }),
+        error => error?.details?.code === 'forbidden')
+      assert.equal((await claim.get()).data().state, 'pending')
+      assert.equal((await db.collection('receipts').doc(operationId).get()).exists, false)
+    } finally {
+      if (emulator === undefined) delete process.env.FUNCTIONS_EMULATOR
+      else process.env.FUNCTIONS_EMULATOR = emulator
+      if (testers === undefined) delete process.env.AI_TESTER_UIDS
+      else process.env.AI_TESTER_UIDS = testers
+    }
+  }
 })

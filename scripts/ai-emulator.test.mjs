@@ -5,14 +5,12 @@ import { initializeApp } from 'firebase-admin/app'
 import { FieldValue, getFirestore } from 'firebase-admin/firestore'
 import { commandSchema } from '@threadline/shared'
 
-// Explicit test process env isolates demo-threadline project and loopback emulators.
-process.env.FUNCTIONS_EMULATOR = 'true'
-process.env.GCLOUD_PROJECT = 'demo-threadline'
-process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080'
-process.env.FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9099'
-process.env.FIREBASE_EMULATOR_HUB = '127.0.0.1:4400'
+import { authSignUpUrl } from './emulator-test-env.mjs'
 
-import { handleAskThreadline, handleRetryAiReply } from '../functions/dist/ai/lifecycle.js'
+import {
+  handleAskThreadline,
+  handleRetryAiReply,
+} from '../functions/dist/ai/lifecycle.js'
 import {
   parseAnswer,
   prepareContext,
@@ -26,6 +24,29 @@ import {
 import { handleCreateRoom } from '../functions/dist/handlers/createRoom.js'
 import { handleSendRoomMessage } from '../functions/dist/handlers/sendRoomMessage.js'
 import { handleEditMessage, handleDeleteMessage } from '../functions/dist/handlers/messageMutations.js'
+
+export function createControlledModeration({
+  verdict = 'allow',
+  policyVersion = 'threadline-moderation-v1',
+  reason = null,
+  onScreen,
+  failScreen,
+} = {}) {
+  let screenCalls = 0
+  return {
+    get screenCalls() { return screenCalls },
+    async screen(text, signal) {
+      screenCalls++
+      if (onScreen) await onScreen(text, signal)
+      if (failScreen) throw failScreen
+      return {
+        verdict,
+        policyVersion,
+        reason: verdict === 'block' ? (reason ?? 'policy-blocked') : null,
+      }
+    },
+  }
+}
 
 // A named emulator database prevents controlled qualification fixtures from enabling
 // the live-key callable or changing a developer's default-database counters.
@@ -72,7 +93,7 @@ function createControlledProvider({
 
 async function createTestAccount() {
   const response = await fetch(
-    'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signUp?key=emulator-only',
+    authSignUpUrl,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -185,8 +206,7 @@ test.after(async () => {
 const localPolicy = { localDevelopment: true, testerUids: [] }
 async function failedAsk(user, roomId, provider = createControlledProvider({ failGenerate: new Error('Controlled provider failure') })) {
   const promptMessageId = randomUUID()
-  const result = await handleAskThreadline(db, user.localId, 'Member', randomUUID(),
-    { roomId, messageId: promptMessageId, text: 'Synthetic question whose original context must be preserved' }, localPolicy, provider)
+  const result = await handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: promptMessageId, text: 'Synthetic question whose original context must be preserved' }, localPolicy, provider, createControlledModeration())
   assert.equal(result.status, 'failed')
   const generationId = (await db.collection('rooms').doc(roomId).get()).data().latestGenerationId
   return { roomId, promptMessageId, generationId }
@@ -232,15 +252,7 @@ test('access enforcement: hosted policy denies non-allowlisted callers while loc
 
   await assert.rejects(
     async () => {
-      await handleAskThreadline(
-        db,
-        user.localId,
-        'Tester',
-        requestId,
-        { roomId, messageId, text: 'Should fail hosted allowlist' },
-        emptyPolicy,
-        provider
-      )
+      await handleAskThreadline(db, user.localId, 'Tester', requestId, { roomId, messageId, text: 'Should fail hosted allowlist' }, emptyPolicy, provider, createControlledModeration())
     },
     (err) => err?.details?.code === 'forbidden'
   )
@@ -253,23 +265,14 @@ test('access enforcement: hosted policy denies non-allowlisted callers while loc
   // 2. Hosted policy denial with non-matching testerUids
   const unauthPolicy = { testerUids: ['different-tester-id'] }
   await assert.rejects(
-    handleAskThreadline(db, user.localId, 'Tester', requestId,
-      { roomId, messageId, text: 'Should fail hosted allowlist' }, unauthPolicy, provider),
+    handleAskThreadline(db, user.localId, 'Tester', requestId, { roomId, messageId, text: 'Should fail hosted allowlist' }, unauthPolicy, provider, createControlledModeration()),
     (err) => err?.details?.code === 'forbidden'
   )
 
   // 3. Local development access allows authenticated member
   const localPolicy = { localDevelopment: true, testerUids: [] }
 
-  const admitted = await handleAskThreadline(
-    db,
-    user.localId,
-    'Tester',
-    requestId,
-    { roomId, messageId, text: 'Hello Threadline with local access' },
-    localPolicy,
-    provider
-  )
+  const admitted = await handleAskThreadline(db, user.localId, 'Tester', requestId, { roomId, messageId, text: 'Hello Threadline with local access' }, localPolicy, provider, createControlledModeration())
   assert.equal(admitted.status, 'complete')
   assert.equal(admitted.roomId, roomId)
   assert.equal(admitted.messageId, messageId)
@@ -307,7 +310,7 @@ test('simultaneous Ask admits one request without saving or charging the loser',
   const policy = { localDevelopment: true, testerUids: [] }
   const inputs = [userA, userB].map(() => ({ roomId, messageId: randomUUID(), text: 'Concurrent Ask' }))
   const outcomes = [userA, userB].map((user, i) =>
-    handleAskThreadline(db, user.localId, 'Member', randomUUID(), inputs[i], policy, provider)
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), inputs[i], policy, provider, createControlledModeration())
       .then(value => ({ value }), error => ({ error })))
   try {
     assert.equal((await Promise.race(outcomes)).error?.details?.code, 'room-busy')
@@ -349,22 +352,22 @@ test('captured cutoff isolates prompt context while four members send messages, 
         roomId,
         messageId: randomUUID(),
         text: 'Intervening human message 1',
-      })
+      }, createControlledModeration())
       await handleSendRoomMessage(db, m2.localId, 'Member 2', randomUUID(), {
         roomId,
         messageId: randomUUID(),
         text: 'Intervening human message 2',
-      })
+      }, createControlledModeration())
       await handleSendRoomMessage(db, m3.localId, 'Member 3', randomUUID(), {
         roomId,
         messageId: randomUUID(),
         text: 'Intervening human message 3',
-      })
+      }, createControlledModeration())
       await handleSendRoomMessage(db, m4.localId, 'Member 4', randomUUID(), {
         roomId,
         messageId: randomUUID(),
         text: 'Intervening human message 4',
-      })
+      }, createControlledModeration())
     },
   })
 
@@ -372,15 +375,7 @@ test('captured cutoff isolates prompt context while four members send messages, 
   const requestId = randomUUID()
   const policy = { localDevelopment: true, testerUids: [owner.localId] }
 
-  const result = await handleAskThreadline(
-    db,
-    owner.localId,
-    'Owner',
-    requestId,
-    { roomId, messageId: promptMsgId, text: 'Initial prompt for cutoff test' },
-    policy,
-    provider
-  )
+  const result = await handleAskThreadline(db, owner.localId, 'Owner', requestId, { roomId, messageId: promptMsgId, text: 'Initial prompt for cutoff test' }, policy, provider, createControlledModeration())
 
   assert.equal(result.status, 'complete')
 
@@ -423,7 +418,7 @@ test('payload-bound replay returns identical result without double-counting; con
   const initialInput = { roomId, messageId, text: 'Exact payload for replay test' }
 
   // 1. Initial successful Ask
-  const initial = await handleAskThreadline(db, user.localId, 'User', requestId, initialInput, policy, provider)
+  const initial = await handleAskThreadline(db, user.localId, 'User', requestId, initialInput, policy, provider, createControlledModeration())
   assert.equal(initial.status, 'complete')
 
   const quotaSnapInitial = await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()
@@ -435,7 +430,7 @@ test('payload-bound replay returns identical result without double-counting; con
   assert.equal(budgetSnapInitial.data()?.reservedMicroUsd, 0)
 
   // 2. Exact replay with identical requestId and payload
-  const replay = await handleAskThreadline(db, user.localId, 'User', requestId, initialInput, policy, provider)
+  const replay = await handleAskThreadline(db, user.localId, 'User', requestId, initialInput, policy, provider, createControlledModeration())
   assert.equal(replay.operationId, initial.operationId)
   assert.equal(replay.status, initial.status)
   assert.equal(replay.roomId, initial.roomId)
@@ -451,15 +446,7 @@ test('payload-bound replay returns identical result without double-counting; con
   // 3. Conflicting payload with same requestId but different text
   await assert.rejects(
     async () => {
-      await handleAskThreadline(
-        db,
-        user.localId,
-        'User',
-        requestId,
-        { roomId, messageId, text: 'Conflicting changed prompt text' },
-        policy,
-        provider
-      )
+      await handleAskThreadline(db, user.localId, 'User', requestId, { roomId, messageId, text: 'Conflicting changed prompt text' }, policy, provider, createControlledModeration())
     },
     (err) => err?.details?.code === 'conflict'
   )
@@ -480,15 +467,7 @@ test('preparation failure releases reservation while dispatch failure consumes i
   const prepReqId = randomUUID()
   const prepMsgId = randomUUID()
 
-  const prepResult = await handleAskThreadline(
-    db,
-    user.localId,
-    'User',
-    prepReqId,
-    { roomId, messageId: prepMsgId, text: 'Prompt that fails during prep' },
-    policy,
-    prepFailProvider
-  )
+  const prepResult = await handleAskThreadline(db, user.localId, 'User', prepReqId, { roomId, messageId: prepMsgId, text: 'Prompt that fails during prep' }, policy, prepFailProvider, createControlledModeration())
   assert.equal(prepResult.status, 'failed')
 
   const prepQuota = (await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).data()
@@ -506,15 +485,7 @@ test('preparation failure releases reservation while dispatch failure consumes i
   const dispatchReqId = randomUUID()
   const dispatchMsgId = randomUUID()
 
-  const dispatchResult = await handleAskThreadline(
-    db,
-    user.localId,
-    'User',
-    dispatchReqId,
-    { roomId, messageId: dispatchMsgId, text: 'Prompt that fails after dispatch claim' },
-    policy,
-    dispatchFailProvider
-  )
+  const dispatchResult = await handleAskThreadline(db, user.localId, 'User', dispatchReqId, { roomId, messageId: dispatchMsgId, text: 'Prompt that fails after dispatch claim' }, policy, dispatchFailProvider, createControlledModeration())
   assert.equal(dispatchResult.status, 'failed')
 
   const dispatchQuota = (await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).data()
@@ -539,7 +510,7 @@ test('concurrent rooms share the same 50 lifetime attempts per UID', { timeout: 
   const provider = createControlledProvider({ onGenerate: () => release.promise })
   const policy = { localDevelopment: true, testerUids: [] }
   const outcomes = roomIds.map(roomId =>
-    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Attempt 50' }, policy, provider)
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Attempt 50' }, policy, provider, createControlledModeration())
       .then(value => ({ value }), error => ({ error })))
   try {
     assert.equal((await Promise.race(outcomes)).error?.details?.code, 'budget-exhausted')
@@ -551,8 +522,7 @@ test('concurrent rooms share the same 50 lifetime attempts per UID', { timeout: 
   const quota = (await quotaRef.get()).data()
   assert.equal(quota.consumedAttempts, 50)
   assert.equal(quota.reservedAttempts, 0)
-  await assert.rejects(handleAskThreadline(db, user.localId, 'Member', randomUUID(),
-    { roomId: roomIds[0], messageId: randomUUID(), text: 'Attempt 51' }, policy, provider),
+  await assert.rejects(handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId: roomIds[0], messageId: randomUUID(), text: 'Attempt 51' }, policy, provider, createControlledModeration()),
     error => error?.details?.code === 'budget-exhausted')
   assert.equal(provider.generateCalls, 1)
 })
@@ -566,13 +536,11 @@ test('shared allowance and pricing gates survive cross-UID reservation races', {
   const policy = { localDevelopment: true, testerUids: [] }
   const deniedProvider = createControlledProvider()
   await setQualifiedBudget({ pricingExpiresAt: Date.now() - 1 })
-  await assert.rejects(handleAskThreadline(db, users[0].localId, 'Member', randomUUID(),
-    { roomId: roomIds[0], messageId: randomUUID(), text: 'Invalid configuration' }, policy, deniedProvider),
+  await assert.rejects(handleAskThreadline(db, users[0].localId, 'Member', randomUUID(), { roomId: roomIds[0], messageId: randomUUID(), text: 'Invalid configuration' }, policy, deniedProvider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable')
 
   await setQualifiedBudget({ consumedMicroUsd: 4980000 })
-  await assert.rejects(handleAskThreadline(db, users[0].localId, 'Member', randomUUID(),
-    { roomId: roomIds[0], messageId: randomUUID(), text: 'Exhausted allowance' }, policy, deniedProvider),
+  await assert.rejects(handleAskThreadline(db, users[0].localId, 'Member', randomUUID(), { roomId: roomIds[0], messageId: randomUUID(), text: 'Exhausted allowance' }, policy, deniedProvider, createControlledModeration()),
     error => error?.details?.code === 'budget-exhausted')
   assert.equal(deniedProvider.countCalls, 0)
   assert.equal(deniedProvider.generateCalls, 0)
@@ -581,8 +549,7 @@ test('shared allowance and pricing gates survive cross-UID reservation races', {
   t.signal.addEventListener('abort', () => release.resolve(), { once: true })
   const provider = createControlledProvider({ onGenerate: () => release.promise })
   const outcomes = users.map((user, i) =>
-    handleAskThreadline(db, user.localId, 'Member', randomUUID(),
-      { roomId: roomIds[i], messageId: randomUUID(), text: 'Last shared reservation' }, policy, provider)
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId: roomIds[i], messageId: randomUUID(), text: 'Last shared reservation' }, policy, provider, createControlledModeration())
       .then(value => ({ value }), error => ({ error })))
   try {
     assert.equal((await Promise.race(outcomes)).error?.details?.code, 'budget-exhausted')
@@ -650,15 +617,7 @@ test('context builder omits tombstone and stale messages, and drops complete con
     },
   })
 
-  await handleAskThreadline(
-    db,
-    user.localId,
-    'User',
-    randomUUID(),
-    { roomId, messageId: promptId, text: 'Prompt checking context filtering' },
-    { localDevelopment: true, testerUids: [user.localId] },
-    provider
-  )
+  await handleAskThreadline(db, user.localId, 'User', randomUUID(), { roomId, messageId: promptId, text: 'Prompt checking context filtering' }, { localDevelopment: true, testerUids: [user.localId] }, provider, createControlledModeration())
 
   assert.ok(preparedContextReceived)
   const refIds = preparedContextReceived.refs.map((r) => r.id)
@@ -718,9 +677,7 @@ test('expired recovery never redispatches and the real late-completion path cann
   const release = Promise.withResolvers()
   let now = Date.now()
   const provider = createControlledProvider({ onGenerate: async () => { entered.resolve(); await release.promise } })
-  const work = handleAskThreadline(db, user.localId, 'Member', randomUUID(),
-    { roomId, messageId: randomUUID(), text: 'Synthetic expired Ask' },
-    { localDevelopment: true, testerUids: [], now: () => now }, provider)
+  const work = handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Synthetic expired Ask' }, { localDevelopment: true, testerUids: [], now: () => now }, provider, createControlledModeration())
   await entered.promise
   const generationId = (await db.collection('rooms').doc(roomId).get()).data().activeGenerationId
   const generationRef = db.collection('rooms').doc(roomId).collection('generations').doc(generationId)
@@ -750,8 +707,7 @@ test('deletion settles preparing and dispatched work without late resurrection o
     const pause = async () => { entered.resolve(); await release.promise }
     const provider = createControlledProvider(phase === 'preparing' ? { onCount: pause } : { onGenerate: pause })
     const text = `Synthetic private deletion prompt ${randomUUID()}`
-    const work = handleAskThreadline(db, user.localId, 'Member', randomUUID(),
-      { roomId, messageId: randomUUID(), text }, { localDevelopment: true, testerUids: [] }, provider)
+    const work = handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text }, { localDevelopment: true, testerUids: [] }, provider, createControlledModeration())
     await entered.promise
     const generationId = (await db.collection('rooms').doc(roomId).get()).data().activeGenerationId
     const deletion = await handleDeleteRoom(db, user.localId, randomUUID(), { roomId })
@@ -805,8 +761,7 @@ test('an explicit retry preserves the question and cutoff; concurrent replay doe
   const roomId = await createTestRoom(user.localId)
   const input = await failedAsk(user, roomId)
   const laterId = randomUUID()
-  await handleSendRoomMessage(db, user.localId, 'Member', randomUUID(),
-    { roomId, messageId: laterId, text: 'Later human chat must not silently enter the original question' })
+  await handleSendRoomMessage(db, user.localId, 'Member', randomUUID(), { roomId, messageId: laterId, text: 'Later human chat must not silently enter the original question' }, createControlledModeration())
   const entered = Promise.withResolvers()
   const release = Promise.withResolvers()
   let usedContext
@@ -816,18 +771,18 @@ test('an explicit retry preserves the question and cutoff; concurrent replay doe
     await release.promise
   } })
   const requestId = randomUUID()
-  const work = handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider)
+  const work = handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider, createControlledModeration())
   await entered.promise
   const retryGenerationId = (await db.collection('rooms').doc(roomId).get()).data().latestGenerationId
-  const replay = await handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider)
+  const replay = await handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider, createControlledModeration())
   assert.equal(replay.status, 'pending')
-  await assert.rejects(handleRetryAiReply(db, user.localId, 'Member', randomUUID(), input, localPolicy, provider))
+  await assert.rejects(handleRetryAiReply(db, user.localId, 'Member', randomUUID(), input, localPolicy, provider, createControlledModeration()))
   assert.equal((await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).data().reservedAttempts, 0)
   assert.deepEqual(usedContext.refs.map(ref => ref.id), [input.promptMessageId])
   release.resolve()
   const completed = await work
   assert.equal(completed.status, 'complete')
-  assert.equal((await handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider)).status, 'complete')
+  assert.equal((await handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider, createControlledModeration())).status, 'complete')
   assert.equal(provider.generateCalls, 1)
   const messages = await db.collection('rooms').doc(roomId).collection('messages').orderBy('seq').get()
   assert.deepEqual(messages.docs.map(doc => ({ id: doc.id, seq: doc.data().seq, kind: doc.data().kind })), [
@@ -838,11 +793,9 @@ test('an explicit retry preserves the question and cutoff; concurrent replay doe
   assert.equal(messages.docs[2].data().replyToId, input.promptMessageId)
   assert.equal((await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).data().consumedAttempts, 2)
   assert.equal((await db.collection('budgets').doc(BUDGET_ID).get()).data().consumedMicroUsd, 60000)
-  await assert.rejects(handleRetryAiReply(db, user.localId, 'Member', requestId,
-    { ...input, generationId: randomUUID() }, localPolicy, provider), error => error?.details?.code === 'conflict')
+  await assert.rejects(handleRetryAiReply(db, user.localId, 'Member', requestId, { ...input, generationId: randomUUID() }, localPolicy, provider, createControlledModeration()), error => error?.details?.code === 'conflict')
   const latestId = (await db.collection('rooms').doc(roomId).get()).data().latestGenerationId
-  await assert.rejects(handleRetryAiReply(db, user.localId, 'Member', randomUUID(),
-    { ...input, generationId: latestId }, localPolicy, provider))
+  await assert.rejects(handleRetryAiReply(db, user.localId, 'Member', randomUUID(), { ...input, generationId: latestId }, localPolicy, provider, createControlledModeration()))
   assert.equal(provider.generateCalls, 1)
 })
 
@@ -858,7 +811,7 @@ test('author, prompt mutation, newer Ask, membership and fences reject retry bef
       await addRoomMember(roomId, other.localId)
       callerUid = other.localId
     } else if (reason === 'edited') {
-      await handleEditMessage(db, user.localId, randomUUID(), { roomId, messageId: input.promptMessageId, expectedVersion: 1, text: 'Changed question' })
+      await handleEditMessage(db, user.localId, randomUUID(), { roomId, messageId: input.promptMessageId, expectedVersion: 1, text: 'Changed question' }, createControlledModeration())
       await handleResumeMaintenance(db, user.localId, randomUUID(), { operationId: (await roomRef.get()).data().maintenanceId })
     } else if (reason === 'deleted') {
       await handleDeleteMessage(db, user.localId, randomUUID(), { roomId, messageId: input.promptMessageId, expectedVersion: 1 })
@@ -874,7 +827,7 @@ test('author, prompt mutation, newer Ask, membership and fences reject retry bef
     }
     const provider = createControlledProvider()
     const quotaBefore = (await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).data()
-    await assert.rejects(handleRetryAiReply(db, callerUid, 'Member', randomUUID(), input, localPolicy, provider), undefined, reason)
+    await assert.rejects(handleRetryAiReply(db, callerUid, 'Member', randomUUID(), input, localPolicy, provider, createControlledModeration()), undefined, reason)
     assert.equal(provider.countCalls, 0, reason)
     assert.equal(provider.generateCalls, 0, reason)
     assert.deepEqual((await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).data(), quotaBefore, reason)
@@ -887,16 +840,15 @@ test('retry admission shares account lifetime limits and never bypasses hosted a
   const input = await failedAsk(user, roomId, createControlledProvider({ failCount: new Error('Controlled pre-dispatch failure') }))
   await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).update({ consumedAttempts: 49 })
   const provider = createControlledProvider({ failGenerate: new Error('Controlled dispatched failure') })
-  const failed = await handleRetryAiReply(db, user.localId, 'Member', randomUUID(), input, localPolicy, provider)
+  const failed = await handleRetryAiReply(db, user.localId, 'Member', randomUUID(), input, localPolicy, provider, createControlledModeration())
   assert.equal(failed.status, 'failed')
   assert.equal((await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).data().consumedAttempts, 50)
   const latestId = (await db.collection('rooms').doc(roomId).get()).data().latestGenerationId
   const nextProvider = createControlledProvider()
   const nextInput = { ...input, generationId: latestId }
-  await assert.rejects(handleRetryAiReply(db, user.localId, 'Member', randomUUID(), nextInput, localPolicy, nextProvider),
+  await assert.rejects(handleRetryAiReply(db, user.localId, 'Member', randomUUID(), nextInput, localPolicy, nextProvider, createControlledModeration()),
     error => error?.details?.code === 'budget-exhausted')
-  await assert.rejects(handleRetryAiReply(db, user.localId, 'Member', randomUUID(), nextInput,
-    { testerUids: [] }, nextProvider), error => error?.details?.code === 'forbidden')
+  await assert.rejects(handleRetryAiReply(db, user.localId, 'Member', randomUUID(), nextInput, { testerUids: [] }, nextProvider, createControlledModeration()), error => error?.details?.code === 'forbidden')
   assert.equal(nextProvider.countCalls, 0)
   assert.equal(nextProvider.generateCalls, 0)
 })
@@ -907,7 +859,7 @@ test('retry consumes the same shared allowance rather than resetting a failed qu
   const roomId = await createTestRoom(user.localId)
   const input = await failedAsk(user, roomId)
   const provider = createControlledProvider()
-  await assert.rejects(handleRetryAiReply(db, user.localId, 'Member', randomUUID(), input, localPolicy, provider),
+  await assert.rejects(handleRetryAiReply(db, user.localId, 'Member', randomUUID(), input, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'budget-exhausted')
   assert.equal(provider.countCalls, 0)
   assert.equal(provider.generateCalls, 0)
@@ -926,15 +878,7 @@ test('unqualified provider configuration denies local members before prompt admi
 
   await assert.rejects(
     async () => {
-      await handleAskThreadline(
-        db,
-        user.localId,
-        'User',
-        randomUUID(),
-        { roomId, messageId: randomUUID(), text: 'Prompt on unqualified budget' },
-        { localDevelopment: true, testerUids: [user.localId] },
-        provider
-      )
+      await handleAskThreadline(db, user.localId, 'User', randomUUID(), { roomId, messageId: randomUUID(), text: 'Prompt on unqualified budget' }, { localDevelopment: true, testerUids: [user.localId] }, provider, createControlledModeration())
     },
     (err) => err?.details?.code === 'provider-unavailable'
   )
@@ -963,15 +907,7 @@ test('local uncapped Ask and retry proceed past former monetary ceiling with pre
   const askRequestId = randomUUID()
   const askMessageId = randomUUID()
   const failingProvider = createControlledProvider({ failGenerate: new Error('Controlled generation failure') })
-  const askResult = await handleAskThreadline(
-    db,
-    user.localId,
-    'Author',
-    askRequestId,
-    { roomId, messageId: askMessageId, text: 'Uncapped Ask question past former monetary ceiling' },
-    localPolicy,
-    failingProvider
-  )
+  const askResult = await handleAskThreadline(db, user.localId, 'Author', askRequestId, { roomId, messageId: askMessageId, text: 'Uncapped Ask question past former monetary ceiling' }, localPolicy, failingProvider, createControlledModeration())
   assert.equal(askResult.status, 'failed')
 
   // Attempt quota preserved: exactly 1 attempt consumed
@@ -985,15 +921,7 @@ test('local uncapped Ask and retry proceed past former monetary ceiling with pre
   assert.equal(budgetAfterAsk.reservedMicroUsd, 0)
 
   // Exact replay of Ask returns cached receipt without double counting attempts or micro-USD
-  const askReplay = await handleAskThreadline(
-    db,
-    user.localId,
-    'Author',
-    askRequestId,
-    { roomId, messageId: askMessageId, text: 'Uncapped Ask question past former monetary ceiling' },
-    localPolicy,
-    failingProvider
-  )
+  const askReplay = await handleAskThreadline(db, user.localId, 'Author', askRequestId, { roomId, messageId: askMessageId, text: 'Uncapped Ask question past former monetary ceiling' }, localPolicy, failingProvider, createControlledModeration())
   assert.equal(askReplay.operationId, askResult.operationId)
   assert.equal(askReplay.status, 'failed')
   const quotaAfterAskReplay = (await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).data()
@@ -1008,15 +936,7 @@ test('local uncapped Ask and retry proceed past former monetary ceiling with pre
   const retryInput = { roomId, promptMessageId: askMessageId, generationId }
   const succeedingProvider = createControlledProvider({ answerText: 'Successful retry response past former monetary ceiling' })
 
-  const retryResult = await handleRetryAiReply(
-    db,
-    user.localId,
-    'Author',
-    retryRequestId,
-    retryInput,
-    localPolicy,
-    succeedingProvider
-  )
+  const retryResult = await handleRetryAiReply(db, user.localId, 'Author', retryRequestId, retryInput, localPolicy, succeedingProvider, createControlledModeration())
   assert.equal(retryResult.status, 'complete')
 
   // Attempt quota preserved: now 2 attempts consumed
@@ -1030,15 +950,7 @@ test('local uncapped Ask and retry proceed past former monetary ceiling with pre
   assert.equal(budgetAfterRetry.reservedMicroUsd, 0)
 
   // Exact replay of Retry returns cached receipt without double counting attempts or micro-USD
-  const retryReplay = await handleRetryAiReply(
-    db,
-    user.localId,
-    'Author',
-    retryRequestId,
-    retryInput,
-    localPolicy,
-    succeedingProvider
-  )
+  const retryReplay = await handleRetryAiReply(db, user.localId, 'Author', retryRequestId, retryInput, localPolicy, succeedingProvider, createControlledModeration())
   assert.equal(retryReplay.operationId, retryResult.operationId)
   assert.equal(retryReplay.status, 'complete')
   const quotaAfterRetryReplay = (await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).data()
@@ -1057,15 +969,7 @@ test('local numeric exhaustion enforces explicit cap while hosted policy rejects
   // 1. Local explicit numeric cap > $10 is permitted, but exhausts when consumed reaches cap
   await setQualifiedBudget({ allowanceMicroUsd: 20000000, consumedMicroUsd: 19980000 })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Local numeric exhaustion check' },
-      localPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Local numeric exhaustion check' }, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'budget-exhausted'
   )
 
@@ -1074,30 +978,14 @@ test('local numeric exhaustion enforces explicit cap while hosted policy rejects
   const failedInput = await failedAsk(user, roomId)
   await setQualifiedBudget({ allowanceMicroUsd: 20000000, consumedMicroUsd: 19980000 })
   await assert.rejects(
-    handleRetryAiReply(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      failedInput,
-      localPolicy,
-      provider
-    ),
+    handleRetryAiReply(db, user.localId, 'Member', randomUUID(), failedInput, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'budget-exhausted'
   )
 
   // 2. Hosted policy denies explicit null allowance
   await setQualifiedBudget({ allowanceMicroUsd: null })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Hosted null allowance check' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Hosted null allowance check' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1113,71 +1001,31 @@ test('local numeric exhaustion enforces explicit cap while hosted policy rejects
     reservedMicroUsd: 0,
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Missing allowance under local policy' },
-      localPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Missing allowance under local policy' }, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Missing allowance under hosted policy' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Missing allowance under hosted policy' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
   // 5. Negative allowanceMicroUsd fails closed
   await setQualifiedBudget({ allowanceMicroUsd: -1 })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Negative allowance check' },
-      localPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Negative allowance check' }, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
   // 6. Qualification is never bypassed by allowanceMicroUsd: null under local policy
   await setQualifiedBudget({ allowanceMicroUsd: null, qualified: false })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Unqualified budget with null allowance' },
-      localPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Unqualified budget with null allowance' }, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
   await setQualifiedBudget({ allowanceMicroUsd: null, paidServicesVerified: false })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Unverified services with null allowance' },
-      localPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Unverified services with null allowance' }, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 })
@@ -1206,15 +1054,7 @@ test('local Ask and retry proceed beyond 50 attempts when localAttemptLimit is n
   const askRequestId = randomUUID()
   const askMessageId = randomUUID()
   const askProvider = createControlledProvider({ answerText: 'Answer on attempt 51 beyond 50 ceiling.' })
-  const askResult = await handleAskThreadline(
-    db,
-    user.localId,
-    'Author',
-    askRequestId,
-    { roomId, messageId: askMessageId, text: 'Question on attempt 51' },
-    localPolicy,
-    askProvider
-  )
+  const askResult = await handleAskThreadline(db, user.localId, 'Author', askRequestId, { roomId, messageId: askMessageId, text: 'Question on attempt 51' }, localPolicy, askProvider, createControlledModeration())
   assert.equal(askResult.status, 'complete')
 
   // Quota bucket updated: 51 consumed attempts
@@ -1230,15 +1070,7 @@ test('local Ask and retry proceed beyond 50 attempts when localAttemptLimit is n
   const failRequestId = randomUUID()
   const failMessageId = randomUUID()
   const failingProvider = createControlledProvider({ failGenerate: new Error('Controlled generation failure on attempt 52') })
-  const failResult = await handleAskThreadline(
-    db,
-    user.localId,
-    'Author',
-    failRequestId,
-    { roomId, messageId: failMessageId, text: 'Question on attempt 52 that fails' },
-    localPolicy,
-    failingProvider
-  )
+  const failResult = await handleAskThreadline(db, user.localId, 'Author', failRequestId, { roomId, messageId: failMessageId, text: 'Question on attempt 52 that fails' }, localPolicy, failingProvider, createControlledModeration())
   assert.equal(failResult.status, 'failed')
 
   const quotaAfter52 = (await quotaRef.get()).data()
@@ -1251,15 +1083,7 @@ test('local Ask and retry proceed beyond 50 attempts when localAttemptLimit is n
   const retryInput = { roomId, promptMessageId: failMessageId, generationId: failedGenId }
   const retryProvider = createControlledProvider({ answerText: 'Successful retry on attempt 53' })
 
-  const retryResult = await handleRetryAiReply(
-    db,
-    user.localId,
-    'Author',
-    retryRequestId,
-    retryInput,
-    localPolicy,
-    retryProvider
-  )
+  const retryResult = await handleRetryAiReply(db, user.localId, 'Author', retryRequestId, retryInput, localPolicy, retryProvider, createControlledModeration())
   assert.equal(retryResult.status, 'complete')
 
   const quotaAfter53 = (await quotaRef.get()).data()
@@ -1271,15 +1095,7 @@ test('local Ask and retry proceed beyond 50 attempts when localAttemptLimit is n
   assert.equal(budgetAfter53.consumedMicroUsd, RESERVATION_MICRO_USD * 3)
 
   // 4. Exact replay on retry beyond 50 returns cached receipt without double counting
-  const retryReplay = await handleRetryAiReply(
-    db,
-    user.localId,
-    'Author',
-    retryRequestId,
-    retryInput,
-    localPolicy,
-    retryProvider
-  )
+  const retryReplay = await handleRetryAiReply(db, user.localId, 'Author', retryRequestId, retryInput, localPolicy, retryProvider, createControlledModeration())
   assert.equal(retryReplay.operationId, retryResult.operationId)
   assert.equal(retryReplay.status, 'complete')
 
@@ -1316,15 +1132,7 @@ test('legacy local ledger preserves prior 50 ceiling when localAttemptLimit is u
   // At 50 consumed attempts, legacy ledger blocks attempt 51
   await quotaRef.set({ requesterId: user.localId, consumedAttempts: 50, reservedAttempts: 0 })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Legacy attempt 51 blocked' },
-      localPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Legacy attempt 51 blocked' }, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'budget-exhausted'
   )
 
@@ -1333,15 +1141,7 @@ test('legacy local ledger preserves prior 50 ceiling when localAttemptLimit is u
   const failedInput = await failedAsk(user, roomId)
   await quotaRef.set({ requesterId: user.localId, consumedAttempts: 50, reservedAttempts: 0 })
   await assert.rejects(
-    handleRetryAiReply(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      failedInput,
-      localPolicy,
-      provider
-    ),
+    handleRetryAiReply(db, user.localId, 'Member', randomUUID(), failedInput, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'budget-exhausted'
   )
 
@@ -1354,71 +1154,31 @@ test('legacy local ledger preserves prior 50 ceiling when localAttemptLimit is u
   })
 
   await quotaRef.set({ requesterId: user.localId, consumedAttempts: 2, reservedAttempts: 0 })
-  const attempt3Result = await handleAskThreadline(
-    db,
-    user.localId,
-    'Member',
-    randomUUID(),
-    { roomId, messageId: randomUUID(), text: 'Attempt 3 under explicit cap of 3' },
-    localPolicy,
-    provider
-  )
+  const attempt3Result = await handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Attempt 3 under explicit cap of 3' }, localPolicy, provider, createControlledModeration())
   assert.equal(attempt3Result.status, 'complete')
 
   // Attempt 4 is rejected by explicit attempt cap
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Attempt 4 under explicit cap of 3' },
-      localPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Attempt 4 under explicit cap of 3' }, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'budget-exhausted'
   )
 
   // 3. Malformed localAttemptLimit fails closed
   await setQualifiedBudget({ localAttemptLimit: -1 })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Negative attempt limit' },
-      localPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Negative attempt limit' }, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
   await setQualifiedBudget({ localAttemptLimit: 3.5 })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Float attempt limit' },
-      localPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Float attempt limit' }, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
   await setQualifiedBudget({ localAttemptLimit: 'unlimited' })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'String attempt limit' },
-      localPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'String attempt limit' }, localPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 })
@@ -1448,15 +1208,7 @@ test('hosted RM20 conversion enforces conservative cap, rejects inflation, and s
     consumedMicroUsd: 0,
     reservedMicroUsd: 0,
   })
-  const admittedResult = await handleAskThreadline(
-    db,
-    user.localId,
-    'Member',
-    randomUUID(),
-    { roomId, messageId: randomUUID(), text: 'Hosted Ask under conservative RM20 ceiling' },
-    hostedPolicy,
-    provider
-  )
+  const admittedResult = await handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Hosted Ask under conservative RM20 ceiling' }, hostedPolicy, provider, createControlledModeration())
   assert.equal(admittedResult.status, 'complete')
 
   // 2. Allowance inflation: allowanceMicroUsd = 4,040,405 exceeds conservative ceiling by 1 uUSD -> REJECTED
@@ -1465,15 +1217,7 @@ test('hosted RM20 conversion enforces conservative cap, rejects inflation, and s
     conversion: syntheticConversion,
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Inflated hosted allowance' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Inflated hosted allowance' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1491,15 +1235,7 @@ test('hosted RM20 conversion enforces conservative cap, rejects inflation, and s
     conversion: lowerFundsConversion,
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Allowance exceeding lower funds ceiling' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Allowance exceeding lower funds ceiling' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1537,15 +1273,7 @@ test('hosted RM20 conversion enforces conservative cap, rejects inflation, and s
     consumedMicroUsd: 1000000,
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Baseline exceeds consumed ledger' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Baseline exceeds consumed ledger' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1559,15 +1287,7 @@ test('hosted RM20 conversion enforces conservative cap, rejects inflation, and s
 
   // Next reservation (30,000 uUSD) requires 2,030,000 uUSD > 2,020,202 uUSD -> budget-exhausted
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Budget exhausted under lower funds ceiling' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Budget exhausted under lower funds ceiling' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'budget-exhausted'
   )
 
@@ -1591,15 +1311,7 @@ test('hosted conversion metadata fails closed on missing, expired, unreviewed, o
     allowanceMicroUsd: 4000000,
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Missing conversion under hosted policy' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Missing conversion under hosted policy' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1608,15 +1320,7 @@ test('hosted conversion metadata fails closed on missing, expired, unreviewed, o
     conversion: createSyntheticConversion({ reviewedAt: Date.now() + 60000 }),
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Future reviewedAt' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Future reviewedAt' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1625,15 +1329,7 @@ test('hosted conversion metadata fails closed on missing, expired, unreviewed, o
     conversion: createSyntheticConversion({ expiresAt: Date.now() - 1000 }),
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Expired conversion' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Expired conversion' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1642,15 +1338,7 @@ test('hosted conversion metadata fails closed on missing, expired, unreviewed, o
     conversion: createSyntheticConversion({ expiresAt: VALID_PRICING_EXPIRY + 86400000 }),
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Expiry exceeding PRICING_EXPIRY' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Expiry exceeding PRICING_EXPIRY' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1659,15 +1347,7 @@ test('hosted conversion metadata fails closed on missing, expired, unreviewed, o
     conversion: createSyntheticConversion({ sources: [] }),
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Empty sources' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Empty sources' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1676,15 +1356,7 @@ test('hosted conversion metadata fails closed on missing, expired, unreviewed, o
     conversion: createSyntheticConversion({ rateMicroMyrPerUsd: 0 }),
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Zero exchange rate' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Zero exchange rate' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1692,15 +1364,7 @@ test('hosted conversion metadata fails closed on missing, expired, unreviewed, o
     conversion: createSyntheticConversion({ rateMicroMyrPerUsd: -4500000 }),
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Negative exchange rate' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Negative exchange rate' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1709,15 +1373,7 @@ test('hosted conversion metadata fails closed on missing, expired, unreviewed, o
     conversion: createSyntheticConversion({ headroomBps: 0 }),
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Zero headroom' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Zero headroom' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1725,15 +1381,7 @@ test('hosted conversion metadata fails closed on missing, expired, unreviewed, o
     conversion: createSyntheticConversion({ headroomBps: -500 }),
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Negative headroom' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Negative headroom' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1742,15 +1390,7 @@ test('hosted conversion metadata fails closed on missing, expired, unreviewed, o
     conversion: createSyntheticConversion({ remainingFundsMicroMyr: -1 }),
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Negative remaining funds' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Negative remaining funds' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 
@@ -1759,15 +1399,7 @@ test('hosted conversion metadata fails closed on missing, expired, unreviewed, o
     conversion: createSyntheticConversion({ alreadyConsumedMicroUsd: -1 }),
   })
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      user.localId,
-      'Member',
-      randomUUID(),
-      { roomId, messageId: randomUUID(), text: 'Negative alreadyConsumed baseline' },
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, user.localId, 'Member', randomUUID(), { roomId, messageId: randomUUID(), text: 'Negative alreadyConsumed baseline' }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'provider-unavailable'
   )
 })
@@ -1794,24 +1426,8 @@ test('hosted cross-UID requests safely serialize shared RM20 budget races and in
   const provider = createControlledProvider({ onGenerate: () => release.promise })
 
   const racers = [
-    handleAskThreadline(
-      db,
-      userA.localId,
-      'User A',
-      randomUUID(),
-      { roomId: roomA, messageId: randomUUID(), text: 'User A racing for last RM20 reservation' },
-      hostedPolicy,
-      provider
-    ).then(value => ({ value }), error => ({ error })),
-    handleAskThreadline(
-      db,
-      userB.localId,
-      'User B',
-      randomUUID(),
-      { roomId: roomB, messageId: randomUUID(), text: 'User B racing for last RM20 reservation' },
-      hostedPolicy,
-      provider
-    ).then(value => ({ value }), error => ({ error })),
+    handleAskThreadline(db, userA.localId, 'User A', randomUUID(), { roomId: roomA, messageId: randomUUID(), text: 'User A racing for last RM20 reservation' }, hostedPolicy, provider, createControlledModeration()).then(value => ({ value }), error => ({ error })),
+    handleAskThreadline(db, userB.localId, 'User B', randomUUID(), { roomId: roomB, messageId: randomUUID(), text: 'User B racing for last RM20 reservation' }, hostedPolicy, provider, createControlledModeration()).then(value => ({ value }), error => ({ error })),
   ]
 
   try {
@@ -1852,28 +1468,12 @@ test('hosted cross-UID requests safely serialize shared RM20 budget races and in
 
   // userA's 51st attempt is rejected
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      userA.localId,
-      'User A',
-      randomUUID(),
-      { roomId: roomA, messageId: randomUUID(), text: 'User A attempt 51' },
-      hostedPolicy,
-      simpleProvider
-    ),
+    handleAskThreadline(db, userA.localId, 'User A', randomUUID(), { roomId: roomA, messageId: randomUUID(), text: 'User A attempt 51' }, hostedPolicy, simpleProvider, createControlledModeration()),
     error => error?.details?.code === 'budget-exhausted'
   )
 
   // userB's attempt succeeds independently!
-  const userBResult = await handleAskThreadline(
-    db,
-    userB.localId,
-    'User B',
-    randomUUID(),
-    { roomId: roomB, messageId: randomUUID(), text: 'User B attempt 1' },
-    hostedPolicy,
-    simpleProvider
-  )
+  const userBResult = await handleAskThreadline(db, userB.localId, 'User B', randomUUID(), { roomId: roomB, messageId: randomUUID(), text: 'User B attempt 1' }, hostedPolicy, simpleProvider, createControlledModeration())
   assert.equal(userBResult.status, 'complete')
 
   const quotaB = (await quotaRefB.get()).data()
@@ -1906,39 +1506,323 @@ test('no request-flag bypass: server policy derives strictly from server environ
 
   // Under hosted policy, outsider is strictly forbidden regardless of forged client payload
   await assert.rejects(
-    handleAskThreadline(
-      db,
-      outsider.localId,
-      'Outsider',
-      randomUUID(),
-      forgedPayload,
-      hostedPolicy,
-      provider
-    ),
+    handleAskThreadline(db, outsider.localId, 'Outsider', randomUUID(), forgedPayload, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'forbidden'
   )
 
   // 2. Outsider trying retry with forged bypass fields is also rejected
   await assert.rejects(
-    handleRetryAiReply(
-      db,
-      outsider.localId,
-      'Outsider',
-      randomUUID(),
-      {
-        roomId,
-        promptMessageId: randomUUID(),
-        generationId: randomUUID(),
-        localDevelopment: true,
-        bypassBudget: true,
-      },
-      hostedPolicy,
-      provider
-    ),
+    handleRetryAiReply(db, outsider.localId, 'Outsider', randomUUID(), {
+      roomId,
+      promptMessageId: randomUUID(),
+      generationId: randomUUID(),
+      localDevelopment: true,
+      bypassBudget: true,
+    }, hostedPolicy, provider, createControlledModeration()),
     error => error?.details?.code === 'forbidden'
   )
 
   // Provider was never invoked
   assert.equal(provider.countCalls, 0)
   assert.equal(provider.generateCalls, 0)
+})
+
+test('Ask input rejection is terminal, hash-only and replays without screening or paid work', { timeout: 15000 }, async () => {
+  const user = await createTestAccount()
+  const roomId = await createTestRoom(user.localId)
+  const roomRef = db.collection('rooms').doc(roomId)
+  const provider = createControlledProvider()
+  const budgetBefore = (await db.collection('budgets').doc(BUDGET_ID).get()).data()
+  for (const options of [{ verdict: 'block' }, { verdict: 'unavailable' }, { verdict: 'unknown' }, { failScreen: new Error('Controlled failure') }]) {
+    const moderation = createControlledModeration(options)
+    const requestId = randomUUID()
+    const input = { roomId, messageId: randomUUID(), text: `Private unapproved prompt ${randomUUID()}` }
+    const result = await handleAskThreadline(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+    assert.equal(result.status, 'failed')
+    assert.equal(result.errorCode, options.verdict === 'block' ? 'screening-blocked' : 'screening-unavailable')
+    assert.deepEqual(await handleAskThreadline(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation), result)
+    assert.equal(moderation.screenCalls, 1)
+    assert.equal((await roomRef.collection('messages').doc(input.messageId).get()).exists, false)
+    const receipt = (await db.collection('receipts').doc(result.operationId).get()).data()
+    assert.equal(receipt.errorCode, result.errorCode)
+    assert.equal(JSON.stringify(receipt).includes(input.text), false)
+    assert.equal((await db.collection('submissions').doc(result.operationId).get()).exists, false)
+  }
+  assert.equal(provider.countCalls, 0)
+  assert.equal(provider.generateCalls, 0)
+  assert.equal((await roomRef.get()).data().activeGenerationId, null)
+  assert.deepEqual((await db.collection('budgets').doc(BUDGET_ID).get()).data(), budgetBefore)
+  assert.equal((await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).exists, false)
+})
+
+test('Ask claim cannot publish after lease expiry even when classification returns allow', { timeout: 15000 }, async () => {
+  const user = await createTestAccount()
+  const roomId = await createTestRoom(user.localId)
+  const input = { roomId, messageId: randomUUID(), text: `Unpublished ${randomUUID()}` }
+  const requestId = randomUUID()
+  const submissionRef = db.collection('submissions').doc(`${user.localId}_askThreadline_${requestId}`)
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const moderation = createControlledModeration({ onScreen: async () => { entered.resolve(); await release.promise } })
+  const provider = createControlledProvider()
+  const budgetBefore = (await db.collection('budgets').doc(BUDGET_ID).get()).data()
+  const work = handleAskThreadline(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+  await entered.promise
+  try {
+    assert.equal(JSON.stringify((await submissionRef.get()).data()).includes(input.text), false)
+    const duplicate = await handleAskThreadline(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+    assert.equal(duplicate.status, 'pending')
+    assert.equal(moderation.screenCalls, 1)
+    await submissionRef.update({ leaseExpiresAt: Date.now() - 1 })
+  } finally { release.resolve() }
+  const result = await work
+  assert.equal(result.status, 'failed')
+  assert.equal(result.errorCode, 'screening-unavailable')
+  assert.deepEqual(await handleAskThreadline(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation), result)
+  assert.equal(moderation.screenCalls, 1)
+  assert.equal(provider.countCalls, 0)
+  assert.equal(provider.generateCalls, 0)
+  assert.equal((await db.collection('rooms').doc(roomId).collection('messages').get()).size, 0)
+  assert.deepEqual((await db.collection('budgets').doc(BUDGET_ID).get()).data(), budgetBefore)
+  assert.equal((await submissionRef.get()).exists, false)
+})
+
+test('Retry duplicates share one durable screen and terminal rejection never dispatches', { timeout: 15000 }, async () => {
+  const user = await createTestAccount()
+  const roomId = await createTestRoom(user.localId)
+  const input = await failedAsk(user, roomId)
+  const requestId = randomUUID()
+  const provider = createControlledProvider()
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const moderation = createControlledModeration({ verdict: 'block', onScreen: async () => { entered.resolve(); await release.promise } })
+  const budgetBefore = (await db.collection('budgets').doc(BUDGET_ID).get()).data()
+  const quotaRef = db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`)
+  const quotaBefore = (await quotaRef.get()).data()
+  const work = handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+  await entered.promise
+  try {
+    const duplicate = await handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+    assert.equal(duplicate.status, 'pending')
+    assert.equal(moderation.screenCalls, 1)
+    const claim = (await db.collection('submissions').doc(duplicate.operationId).get()).data()
+    assert.equal(claim.state, 'pending')
+    assert.equal(JSON.stringify(claim).includes('Synthetic question'), false)
+  } finally { release.resolve() }
+  const result = await work
+  assert.equal(result.status, 'failed')
+  assert.equal(result.errorCode, 'screening-blocked')
+  assert.deepEqual(await handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation), result)
+  assert.equal(moderation.screenCalls, 1)
+  assert.equal(provider.countCalls, 0)
+  assert.equal(provider.generateCalls, 0)
+  assert.deepEqual((await db.collection('budgets').doc(BUDGET_ID).get()).data(), budgetBefore)
+  assert.deepEqual((await quotaRef.get()).data(), quotaBefore)
+  assert.equal((await db.collection('rooms').doc(roomId).collection('generations').get()).size, 1)
+})
+
+test('Retry crashed screening lease settles once and late approval cannot reserve', { timeout: 15000 }, async () => {
+  const user = await createTestAccount()
+  const roomId = await createTestRoom(user.localId)
+  const input = await failedAsk(user, roomId)
+  const requestId = randomUUID()
+  const provider = createControlledProvider()
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const moderation = createControlledModeration({ onScreen: async () => { entered.resolve(); await release.promise } })
+  const budgetBefore = (await db.collection('budgets').doc(BUDGET_ID).get()).data()
+  const work = handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+  await entered.promise
+  let expired
+  try {
+    await db.collection('submissions').doc(`${user.localId}_retryAiReply_${requestId}`).update({ leaseExpiresAt: Date.now() - 1 })
+    expired = await handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+    assert.equal(expired.status, 'failed')
+    assert.equal(expired.errorCode, 'screening-unavailable')
+  } finally { release.resolve() }
+  assert.deepEqual(await work, expired)
+  assert.deepEqual(await handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation), expired)
+  assert.equal(moderation.screenCalls, 1)
+  assert.equal(provider.countCalls, 0)
+  assert.equal(provider.generateCalls, 0)
+  assert.deepEqual((await db.collection('budgets').doc(BUDGET_ID).get()).data(), budgetBefore)
+  assert.equal((await db.collection('rooms').doc(roomId).collection('generations').get()).size, 1)
+})
+
+test('Retry revalidates prompt version after edit maintenance has already finished', { timeout: 15000 }, async () => {
+  const user = await createTestAccount()
+  const roomId = await createTestRoom(user.localId)
+  const input = await failedAsk(user, roomId)
+  const roomRef = db.collection('rooms').doc(roomId)
+  const provider = createControlledProvider()
+  const budgetBefore = (await db.collection('budgets').doc(BUDGET_ID).get()).data()
+  const quotaRef = db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`)
+  const quotaBefore = (await quotaRef.get()).data()
+  const moderation = createControlledModeration({ onScreen: async () => {
+    await handleEditMessage(db, user.localId, randomUUID(),
+      { roomId, messageId: input.promptMessageId, expectedVersion: 1, text: 'Changed approved question' }, createControlledModeration())
+    await handleResumeMaintenance(db, user.localId, randomUUID(), { operationId: (await roomRef.get()).data().maintenanceId })
+    assert.equal((await roomRef.get()).data().maintenanceId, null)
+  } })
+  const result = await handleRetryAiReply(db, user.localId, 'Member', randomUUID(), input, localPolicy, provider, moderation)
+  assert.equal(result.status, 'failed')
+  assert.equal(provider.countCalls, 0)
+  assert.equal(provider.generateCalls, 0)
+  assert.deepEqual((await db.collection('budgets').doc(BUDGET_ID).get()).data(), budgetBefore)
+  assert.deepEqual((await quotaRef.get()).data(), quotaBefore)
+  assert.equal((await roomRef.collection('generations').get()).size, 1)
+  assert.equal((await roomRef.get()).data().latestGenerationId, input.generationId)
+})
+
+test('Output rejection and malformed answers retain spend, release fence and replay safe codes', { timeout: 30000 }, async () => {
+  for (const mode of ['block', 'unavailable', 'unknown', 'throw', 'empty', 'missing']) {
+    const user = await createTestAccount()
+    const roomId = await createTestRoom(user.localId)
+    const roomRef = db.collection('rooms').doc(roomId)
+    const input = { roomId, messageId: randomUUID(), text: 'Approved authored prompt' }
+    const requestId = randomUUID()
+    const output = `Unpublished generated answer ${randomUUID()}`
+    const provider = createControlledProvider({ answerText: mode === 'empty' ? '' : mode === 'missing' ? null : output })
+    let screens = 0
+    const moderation = { async screen() {
+      screens++
+      if (screens === 1) return { verdict: 'allow' }
+      if (mode === 'throw') throw new Error('Controlled unavailable')
+      return { verdict: mode }
+    } }
+    const budgetBefore = (await db.collection('budgets').doc(BUDGET_ID).get()).data().consumedMicroUsd
+    const result = await handleAskThreadline(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+    assert.equal(result.status, 'failed', mode)
+    assert.equal(result.errorCode, mode === 'block' ? 'screening-blocked' : 'screening-unavailable', mode)
+    assert.deepEqual(await handleAskThreadline(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation), result)
+    assert.equal(screens, ['empty', 'missing'].includes(mode) ? 1 : 2, mode)
+    const room = (await roomRef.get()).data()
+    assert.equal(room.activeGenerationId, null)
+    const messages = await roomRef.collection('messages').get()
+    assert.deepEqual(messages.docs.map(doc => doc.data().text), [input.text])
+    const generation = (await roomRef.collection('generations').doc(room.latestGenerationId).get()).data()
+    assert.equal(generation.state, 'failed')
+    assert.equal(generation.errorCode, result.errorCode)
+    assert.equal(JSON.stringify(generation).includes(output), false)
+    assert.equal((await db.collection('receipts').doc(result.operationId).get()).data().errorCode, result.errorCode)
+    assert.equal((await db.collection('budgets').doc(BUDGET_ID).get()).data().consumedMicroUsd, budgetBefore + RESERVATION_MICRO_USD)
+    const quota = (await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).data()
+    assert.equal(quota.consumedAttempts, 1)
+    assert.equal(quota.reservedAttempts, 0)
+  }
+})
+
+test('Room deletion during output screening never resurrects generation or receipt', { timeout: 15000 }, async () => {
+  const user = await createTestAccount()
+  const roomId = await createTestRoom(user.localId)
+  const roomRef = db.collection('rooms').doc(roomId)
+  const input = { roomId, messageId: randomUUID(), text: 'Approved deletion race prompt' }
+  const provider = createControlledProvider()
+  let screens = 0
+  const moderation = { async screen() {
+    screens++
+    if (screens === 2) {
+      const deletion = await handleDeleteRoom(db, user.localId, randomUUID(), { roomId })
+      let resumed = deletion
+      for (let pass = 0; pass < 20 && resumed.status === 'pending'; pass++) {
+        resumed = await handleResumeMaintenance(db, user.localId, randomUUID(), { operationId: deletion.operationId })
+      }
+      assert.equal(resumed.status, 'complete')
+    }
+    return { verdict: 'allow' }
+  } }
+  const result = await handleAskThreadline(db, user.localId, 'Member', randomUUID(), input, localPolicy, provider, moderation)
+  assert.equal(result.status, 'cancelled')
+  assert.equal(screens, 2)
+  assert.equal((await roomRef.collection('messages').get()).size, 0)
+  assert.equal((await roomRef.collection('generations').get()).size, 0)
+  const receipt = (await db.collection('receipts').doc(result.operationId).get()).data()
+  assert.equal(receipt.status, 'cancelled')
+  assert.equal(JSON.stringify(receipt).includes(input.text), false)
+  assert.equal((await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).data().consumedAttempts, 1)
+})
+
+test('Retry publication rejects changed origin or lost claim without reservations or dispatch', { timeout: 30000 }, async () => {
+  for (const mutation of ['newer-origin', 'origin-succeeded', 'claim-missing', 'claim-owner', 'claim-hash', 'claim-state']) {
+    const user = await createTestAccount()
+    const roomId = await createTestRoom(user.localId)
+    const roomRef = db.collection('rooms').doc(roomId)
+    const input = await failedAsk(user, roomId)
+    const requestId = randomUUID()
+    const submissionRef = db.collection('submissions').doc(`${user.localId}_retryAiReply_${requestId}`)
+    const provider = createControlledProvider()
+    const budgetBefore = (await db.collection('budgets').doc(BUDGET_ID).get()).data()
+    const quotaRef = db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`)
+    const quotaBefore = (await quotaRef.get()).data()
+    const moderation = createControlledModeration({ onScreen: async () => {
+      if (mutation === 'newer-origin') await roomRef.update({ latestGenerationId: randomUUID() })
+      if (mutation === 'origin-succeeded') await roomRef.collection('generations').doc(input.generationId).update({ state: 'succeeded' })
+      if (mutation === 'claim-missing') await submissionRef.delete()
+      if (mutation === 'claim-owner') await submissionRef.update({ callerUid: randomUUID() })
+      if (mutation === 'claim-hash') await submissionRef.update({ payloadHash: randomUUID() })
+      if (mutation === 'claim-state') await submissionRef.update({ state: 'unrecognized' })
+    } })
+    const result = await handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+    assert.equal(result.status, 'failed', mutation)
+    assert.equal(result.errorCode, 'screening-unavailable', mutation)
+    assert.equal(moderation.screenCalls, 1)
+    assert.equal(provider.countCalls, 0)
+    assert.equal(provider.generateCalls, 0)
+    assert.equal((await roomRef.collection('generations').get()).size, 1)
+    assert.deepEqual((await db.collection('budgets').doc(BUDGET_ID).get()).data(), budgetBefore)
+    assert.deepEqual((await quotaRef.get()).data(), quotaBefore)
+  }
+})
+
+test('Retry output rejection replays its safe error without screening or spending again', { timeout: 15000 }, async () => {
+  const user = await createTestAccount()
+  const roomId = await createTestRoom(user.localId)
+  const input = await failedAsk(user, roomId)
+  const requestId = randomUUID()
+  const provider = createControlledProvider()
+  let screens = 0
+  const moderation = { async screen() { return { verdict: ++screens === 1 ? 'allow' : 'block' } } }
+  const result = await handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+  assert.equal(result.status, 'failed')
+  assert.equal(result.errorCode, 'screening-blocked')
+  const budget = (await db.collection('budgets').doc(BUDGET_ID).get()).data()
+  const replay = await handleRetryAiReply(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+  assert.equal(replay.status, 'failed')
+  assert.equal(replay.errorCode, result.errorCode)
+  assert.equal(screens, 2)
+  assert.equal(provider.generateCalls, 1)
+  assert.deepEqual((await db.collection('budgets').doc(BUDGET_ID).get()).data(), budget)
+  const room = (await db.collection('rooms').doc(roomId).get()).data()
+  assert.equal(room.activeGenerationId, null)
+  assert.equal((await db.collection('rooms').doc(roomId).collection('messages').get()).size, 1)
+})
+
+test('Recovery during output classification keeps terminal generation and consumed spend', { timeout: 15000 }, async () => {
+  const user = await createTestAccount()
+  const roomId = await createTestRoom(user.localId)
+  const roomRef = db.collection('rooms').doc(roomId)
+  const provider = createControlledProvider()
+  let screens = 0
+  let generationId
+  const moderation = { async screen() {
+    if (++screens === 2) {
+      generationId = (await roomRef.get()).data().activeGenerationId
+      await roomRef.collection('generations').doc(generationId).update({ expiresAt: Date.now() - 1 })
+      const recovered = await handleRecoverGeneration(db, user.localId, randomUUID(), { roomId, generationId })
+      assert.equal(recovered.status, 'failed')
+    }
+    return { verdict: 'allow' }
+  } }
+  const input = { roomId, messageId: randomUUID(), text: 'Approved recovery race prompt' }
+  const requestId = randomUUID()
+  const result = await handleAskThreadline(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+  assert.equal(result.status, 'failed')
+  assert.equal((await roomRef.collection('generations').doc(generationId).get()).data().state, 'timed-out')
+  assert.equal((await roomRef.get()).data().activeGenerationId, null)
+  assert.equal((await roomRef.collection('messages').get()).size, 1)
+  const replay = await handleAskThreadline(db, user.localId, 'Member', requestId, input, localPolicy, provider, moderation)
+  assert.equal(replay.status, result.status)
+  assert.equal(replay.errorCode, result.errorCode)
+  assert.equal(screens, 2)
+  assert.equal(provider.generateCalls, 1)
+  const quota = (await db.collection('quotaBuckets').doc(`aiLifetime_${user.localId}`).get()).data()
+  assert.equal(quota.consumedAttempts, 1)
+  assert.equal(quota.reservedAttempts, 0)
 })

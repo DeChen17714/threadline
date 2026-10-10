@@ -2,24 +2,25 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { initializeApp, deleteApp } from 'firebase/app'
-import { getAuth, connectAuthEmulator, createUserWithEmailAndPassword } from 'firebase/auth'
-import { getFirestore, connectFirestoreEmulator, collection, query, where, orderBy, limit, getDocs, getDoc, doc, setDoc, terminate } from 'firebase/firestore'
+import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth'
+import { getFirestore, collection, query, where, orderBy, limit, getDocs, getDoc, doc, setDoc, terminate } from 'firebase/firestore'
+import { PROJECT_ID, commandEndpoint, documentsBaseUrl, connectTestAuthEmulator, connectTestFirestoreEmulator } from './emulator-test-env.mjs'
 
 const origin = 'http://127.0.0.1:5174'
-const project = 'demo-threadline'
+const project = PROJECT_ID
 async function identity() {
   const app = initializeApp({ projectId: project, apiKey: 'emulator-only', appId: 'emulator-only' }, randomUUID())
   const auth = getAuth(app)
-  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true })
+  connectTestAuthEmulator(auth)
   const db = getFirestore(app)
-  connectFirestoreEmulator(db, '127.0.0.1', 8080)
+  connectTestFirestoreEmulator(db)
   await createUserWithEmailAndPassword(auth, `${randomUUID()}@example.test`, randomUUID())
   return { app, auth, db }
 }
 async function call(client, data, options = {}) {
   const headers = { 'Content-Type': 'application/json', Origin: options.origin ?? origin }
   if (client) headers.Authorization = `Bearer ${await client.auth.currentUser.getIdToken()}`
-  const response = await fetch(`http://127.0.0.1:5001/${project}/asia-southeast1/command`, { method: 'POST', headers, body: JSON.stringify({ data }) })
+  const response = await fetch(commandEndpoint, { method: 'POST', headers, body: JSON.stringify({ data }) })
   let body
   try { body = await response.json() } catch { body = {} }
   return { response, body }
@@ -65,7 +66,7 @@ test('strict authenticated room creation is payload-bound, private and caller-ow
     assert.equal(result(await call(a, lookup)).roomId, first.roomId)
     assert.notEqual((await call(b, lookup)).response.status, 200)
     // Administrative fixtures are confined to the disposable loopback emulator.
-    const fixtureUrl = `http://127.0.0.1:8080/v1/projects/${project}/databases/(default)/documents`
+    const fixtureUrl = documentsBaseUrl('(default)')
     const fixtureHeaders = { Authorization: 'Bearer owner', 'Content-Type': 'application/json' }
     const receipt = await fetch(`${fixtureUrl}/receipts/${first.operationId}`, { headers: fixtureHeaders }).then((r) => r.json())
     assert.equal(JSON.stringify(receipt).includes('Valid private room'), false)

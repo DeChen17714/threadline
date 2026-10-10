@@ -41,23 +41,45 @@ export function createFirebaseInvitations(
       return result.data
     },
 
-    async preview(token: string): Promise<CommandResult> {
+    async request(token: string, requestId: string): Promise<CommandResult> {
       requireAccount()
       const result = await command({
-        requestId: crypto.randomUUID(),
-        operation: 'previewInvite',
+        requestId,
+        operation: 'requestJoin',
         input: { token },
       })
       requireAccount()
       return result.data
     },
 
-    async join(token: string, requestId: string): Promise<CommandResult> {
+    async status(joinRequestId: string): Promise<CommandResult> {
+      requireAccount()
+      const result = await command({
+        requestId: crypto.randomUUID(),
+        operation: 'getJoinStatus',
+        input: { joinRequestId },
+      })
+      requireAccount()
+      return result.data
+    },
+
+    async list(roomId: string): Promise<CommandResult> {
+      requireAccount()
+      const result = await command({
+        requestId: crypto.randomUUID(),
+        operation: 'listJoinRequests',
+        input: { roomId },
+      })
+      requireAccount()
+      return result.data
+    },
+
+    async decide(roomId: string, joinRequestId: string, decision: 'approve' | 'reject', requestId: string): Promise<CommandResult> {
       requireAccount()
       const result = await command({
         requestId,
-        operation: 'joinRoom',
-        input: { token },
+        operation: 'decideJoin',
+        input: { roomId, joinRequestId, decision },
       })
       requireAccount()
       return result.data

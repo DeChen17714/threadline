@@ -62,6 +62,10 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    match /submissions/{submissionId} {
+      allow read, write: if false;
+    }
+
     // Default deny all other documents
     match /{allOther=**} {
       allow read, write: if false;

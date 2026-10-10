@@ -18,6 +18,7 @@ export interface ComposerProps {
   readonly onDraftChange: (text: string) => void
   readonly onSend: (intent: MessageIntent) => Promise<void>
   readonly pending: boolean
+  readonly pendingIntent?: MessageIntent | null
   readonly error: string | null
   readonly onRetry: () => Promise<void>
   readonly canRetry?: boolean
@@ -34,6 +35,7 @@ export function Composer({
   onDraftChange,
   onSend,
   pending,
+  pendingIntent,
   error,
   onRetry,
   canRetry = false,
@@ -46,6 +48,8 @@ export function Composer({
 }: ComposerProps) {
   const isDraftEmpty = draft.trim().length === 0
   const soloAi = askAiAvailable && memberCount === 1
+  const isRoomChecking = pending && (pendingIntent === 'room' || (!pendingIntent && !soloAi))
+  const isAskChecking = pending && (pendingIntent === 'ask-ai' || (!pendingIntent && soloAi))
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     // Ignore active IME composition
@@ -223,7 +227,7 @@ export function Composer({
               disabled={pending || isDraftEmpty || canRetry || offline || isMaintenanceActive}
               title={isMaintenanceActive ? 'Updating conversation context · Sends are paused.' : undefined}
               startIcon={
-                pending ? (
+                isRoomChecking ? (
                   <CircularProgress size={16} color="inherit" />
                 ) : (
                   <SendIcon sx={{ fontSize: 16 }} />
@@ -252,7 +256,7 @@ export function Composer({
                 },
               }}
             >
-              {pending ? 'Sending…' : 'Send to room'}
+              {isRoomChecking ? 'Checking message…' : 'Send to room'}
             </Button>
             )}
 
@@ -260,7 +264,13 @@ export function Composer({
               variant="contained"
               onClick={() => void onSend('ask-ai')}
               disabled={pending || isDraftEmpty || isAiBusy || !askAiAvailable || canRetry || offline || isMaintenanceActive}
-              startIcon={<AutoAwesomeIcon sx={{ fontSize: 16 }} />}
+              startIcon={
+                isAskChecking ? (
+                  <CircularProgress size={16} color="inherit" />
+                ) : (
+                  <AutoAwesomeIcon sx={{ fontSize: 16 }} />
+                )
+              }
               aria-label="Ask Threadline"
               title={
                 isMaintenanceActive
@@ -294,7 +304,7 @@ export function Composer({
                 },
               }}
             >
-              Ask Threadline
+              {isAskChecking ? 'Checking message…' : 'Ask Threadline'}
             </Button>
           </Box>
         </Box>

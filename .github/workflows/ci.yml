@@ -32,3 +32,9 @@ jobs:
 
       - name: Server production policy
         run: npm run test:server-policy
+
+      - name: Moderation fail-closed boundaries
+        run: node --test scripts/moderation-provider.test.mjs
+
+      - name: Test-client isolation from human emulator ports
+        run: node --test scripts/emulator-test-env.test.mjs

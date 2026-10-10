@@ -13,6 +13,8 @@ const ERROR_CODE_MAP: Record<AppErrorCode, FunctionsErrorCode> = {
   'provider-unavailable': 'unavailable',
   timeout: 'deadline-exceeded',
   offline: 'unavailable',
+  'screening-blocked': 'failed-precondition',
+  'screening-unavailable': 'unavailable',
 };
 
 export function createSafeAppError(

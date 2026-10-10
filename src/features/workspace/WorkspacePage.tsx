@@ -97,6 +97,7 @@ export function WorkspacePage({
             onClick={onHome}
             aria-label="Return to Threadline introduction"
           >
+            <img src="/assets/brand/threadline-mark.svg" alt="" width={24} height={24} className={styles.brandMark} />
             Threadline
           </button>
           <Button
@@ -429,6 +430,7 @@ export function WorkspacePage({
                     draft={workspace.draft}
                     onDraftChange={workspace.setDraft}
                     pending={workspace.pending}
+                    pendingIntent={workspace.pendingIntent}
                     error={workspace.error}
                     onSend={workspace.send}
                     onRetry={workspace.retrySend}

@@ -34,7 +34,7 @@ const RUNTIME_ASSETS = [
   'assets/ui/room-empty-state.svg',
   'assets/ui/room-motif.svg',
 
-  // Six WebM/WebP pairs (no 4K, review MP4, or PNG video frames)
+  // Approved lightweight and high-DPI 4K WebM clips with WebP poster fallbacks.
   'assets/video/chat-desktop.webm',
   'assets/video/chat-desktop.webp',
   'assets/video/chat-mobile.webm',
@@ -47,6 +47,12 @@ const RUNTIME_ASSETS = [
   'assets/video/continue-desktop.webp',
   'assets/video/continue-mobile.webm',
   'assets/video/continue-mobile.webp',
+  'assets/video/chat-desktop-4k.webm',
+  'assets/video/chat-mobile-4k.webm',
+  'assets/video/collaborate-desktop-4k.webm',
+  'assets/video/collaborate-mobile-4k.webm',
+  'assets/video/continue-desktop-4k.webm',
+  'assets/video/continue-mobile-4k.webm',
 ]
 
 function stageAssets() {
@@ -113,6 +119,8 @@ function stageAssets() {
       layouts: ['desktop', 'mobile'],
       runtimeVideoPattern: '/assets/video/{chapter}-{layout}.webm',
       runtimePosterPattern: '/assets/video/{chapter}-{layout}.webp',
+      highResolutionVideoPattern: '/assets/video/{chapter}-{layout}-4k.webm',
+      highResolutionMinDppx: 2,
       clips: [
         {
           chapter: 'chat',

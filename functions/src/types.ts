@@ -9,7 +9,9 @@ export type AppErrorCode =
   | 'budget-exhausted'
   | 'provider-unavailable'
   | 'timeout'
-  | 'offline';
+  | 'offline'
+  | 'screening-blocked'
+  | 'screening-unavailable';
 
 export interface AppErrorDetails {
   readonly code: AppErrorCode;

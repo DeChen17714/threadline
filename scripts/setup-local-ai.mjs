@@ -30,7 +30,7 @@ export async function validateLoopbackEnvironment() {
     firestoreHost: process.env.FIRESTORE_EMULATOR_HOST ?? '127.0.0.1:8080',
     authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST ?? '127.0.0.1:9099',
     hubHost: process.env.FIREBASE_EMULATOR_HUB ?? '127.0.0.1:4400',
-    functionsHost: '127.0.0.1:5001',
+    functionsHost: process.env.FIREBASE_FUNCTIONS_EMULATOR_HOST ?? (process.env.FUNCTIONS_EMULATOR_HOST ?? '127.0.0.1:5001'),
   }
   if (!Object.values(hosts).every(isLoopbackHost)) throw new Error('Setup requires loopback emulator hosts with explicit ports.')
   try {
@@ -55,14 +55,21 @@ export async function validateLoopbackEnvironment() {
 export function readLocalSecret({ secretPath = 'functions/.secret.local' } = {}) {
   let stat, content
   try { stat = fs.lstatSync(secretPath) }
-  catch { throw new Error('Create functions/.secret.local in your editor with one GEMINI_API_KEY=... entry. Never put the key in VITE_*, source or shell history.') }
+  catch { throw new Error('Create functions/.secret.local in your editor with GEMINI_API_KEY and OPENAI_API_KEY entries. Never put keys in VITE_*, source or shell history.') }
   if (!stat.isFile() || (process.platform !== 'win32' && (stat.mode & 0o077) !== 0)) throw new Error('Restrict functions/.secret.local to an owner-only regular file: chmod 600 functions/.secret.local')
   try { content = fs.readFileSync(secretPath, 'utf8') }
   catch { throw new Error('Cannot read owner-only functions/.secret.local.') }
   const entries = content.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'))
-  if (entries.length !== 1 || !/^GEMINI_API_KEY\s*=/.test(entries[0])) throw new Error('functions/.secret.local must contain exactly one GEMINI_API_KEY entry, plus optional comments.')
-  const key = entries[0].slice(entries[0].indexOf('=') + 1).trim().replace(/^(['"])(.*)\1$/, '$2')
-  if (!key || /\s/.test(key)) throw new Error('Supply a nonblank Gemini key in functions/.secret.local.')
+  const keys = new Map()
+  for (const entry of entries) {
+    const match = /^(GEMINI_API_KEY|OPENAI_API_KEY)\s*=(.*)$/.exec(entry)
+    if (!match || keys.has(match[1])) throw new Error('functions/.secret.local requires exactly one GEMINI_API_KEY and one OPENAI_API_KEY; no unknown or duplicate entries.')
+    const value = match[2].trim().replace(/^(['"])(.*)\1$/, '$2')
+    if (!value || /\s/.test(value)) throw new Error('Supply nonblank API keys in functions/.secret.local.')
+    keys.set(match[1], value)
+  }
+  if (keys.size !== 2) throw new Error('functions/.secret.local requires GEMINI_API_KEY and OPENAI_API_KEY.')
+  const key = keys.get('GEMINI_API_KEY')
   return key
 }
 

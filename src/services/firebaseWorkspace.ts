@@ -140,6 +140,10 @@ function getSafeAppErrorDetails(error: unknown): SafeAppErrorDetails | null {
 
 function isUncertainError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
+  const details = getSafeAppErrorDetails(error)
+  if (details?.code === 'screening-blocked' || details?.code === 'screening-unavailable') {
+    return false
+  }
   const code = 'code' in error && typeof error.code === 'string' ? error.code.toLowerCase() : ''
   const message = 'message' in error && typeof error.message === 'string' ? error.message.toLowerCase() : ''
   if (
@@ -771,7 +775,7 @@ export function createFirebaseWorkspace(
     const previous = retainedRequests.get(key)
     const requestId = previous ?? crypto.randomUUID()
     retainedRequests.set(key, requestId)
-    const command = httpsCallable<Command, CommandResult>(functions, 'command')
+    const command = httpsCallable<Command, CommandResult>(functions, 'command', { timeout: 120000 })
     const callCommand = async (body: Command): Promise<CommandResult> => {
       try {
         return (await command(body)).data
@@ -848,7 +852,7 @@ export function createFirebaseWorkspace(
       throw new Error('Send status is uncertain. You are offline; check your connection and retry.')
     }
 
-    const command = httpsCallable<Command, CommandResult>(functions, 'command', { timeout: 90000 })
+    const command = httpsCallable<Command, CommandResult>(functions, 'command', { timeout: 120000 })
 
     const { promise: timeoutPromise, reject: rejectTimeout } = Promise.withResolvers<never>()
     const timerId = setTimeout(() => rejectTimeout(new Error(
@@ -881,8 +885,13 @@ export function createFirebaseWorkspace(
       }
 
       const details = getSafeAppErrorDetails(error)
-      if (details?.code && ['validation', 'forbidden', 'unauthenticated', 'room-busy', 'budget-exhausted', 'conflict', 'throttled', 'provider-unavailable'].includes(details.code)) {
-        throw new CommandRejectedError(details.message ?? 'This request was rejected. Your draft is retained.', { cause: error })
+      if (details?.code && ['validation', 'forbidden', 'unauthenticated', 'room-busy', 'budget-exhausted', 'conflict', 'throttled', 'provider-unavailable', 'screening-blocked', 'screening-unavailable'].includes(details.code)) {
+        const msg = details.code === 'screening-blocked'
+          ? (details.message ?? 'This message could not be sent. Please revise your draft and try again.')
+          : details.code === 'screening-unavailable'
+          ? (details.message ?? 'Safety screening is temporarily unavailable. Please try again.')
+          : (details.message ?? 'This request was rejected. Your draft is retained.')
+        throw new CommandRejectedError(msg, { cause: error })
       }
 
       if (isUncertainError(error)) {
@@ -896,9 +905,24 @@ export function createFirebaseWorkspace(
     }
 
     requireAccount()
+    const approvedQuestion = input.intent === 'ask-ai'
+      && result.operationId === `${expectedUid}_askThreadline_${input.requestId}`
+      && result.roomId === input.roomId
+      && result.messageId === input.messageId
+      && Number.isSafeInteger(result.seq) && (result.seq ?? 0) > 0
+    if (result.status === 'failed' && !approvedQuestion) {
+      if (result.errorCode === 'screening-blocked') {
+        throw new CommandRejectedError('This message could not be sent. Please revise your draft and try again.')
+      }
+      if (result.errorCode === 'screening-unavailable') {
+        throw new CommandRejectedError('Safety screening is temporarily unavailable. Please try again.')
+      }
+      throw new CommandRejectedError('This request was rejected. Your draft is retained.')
+    }
 
-    if (input.intent === 'room' && result.status !== 'complete') {
-      throw new Error('Send status is uncertain. Message delivery is not confirmed; retry to confirm.')
+    if ((input.intent === 'room' && result.status !== 'complete')
+      || (input.intent === 'ask-ai' && !approvedQuestion)) {
+      throw new CommandUncertainError('Send status is uncertain. Message delivery is not confirmed; retry to confirm.')
     }
   }
 
@@ -932,7 +956,7 @@ export function createFirebaseWorkspace(
     const previous = retainedRetries.has(retryKey)
     retainedRetries.add(retryKey)
 
-    const command = httpsCallable<Command, CommandResult>(functions, 'command', { timeout: 90000 })
+    const command = httpsCallable<Command, CommandResult>(functions, 'command', { timeout: 120000 })
     const callBounded = async (body: Command): Promise<CommandResult> => {
       const { promise: deadline, reject: rejectDeadline } = Promise.withResolvers<never>()
       const timerId = setTimeout(() => rejectDeadline(new CommandUncertainError(
@@ -947,8 +971,13 @@ export function createFirebaseWorkspace(
         requireAccount()
         if (error instanceof CommandUncertainError) throw error
         const details = getSafeAppErrorDetails(error)
-        if (details?.code && ['validation', 'forbidden', 'unauthenticated', 'room-busy', 'budget-exhausted', 'conflict', 'throttled', 'provider-unavailable'].includes(details.code)) {
-          throw new CommandRejectedError(details.message ?? 'This retry request was rejected.', { cause: error })
+        if (details?.code && ['validation', 'forbidden', 'unauthenticated', 'room-busy', 'budget-exhausted', 'conflict', 'throttled', 'provider-unavailable', 'screening-blocked', 'screening-unavailable'].includes(details.code)) {
+          const msg = details.code === 'screening-blocked'
+            ? (details.message ?? 'This reply could not be generated. Please revise your question and try again.')
+            : details.code === 'screening-unavailable'
+            ? (details.message ?? 'Safety screening is temporarily unavailable. Please try again.')
+            : (details.message ?? 'This retry request was rejected.')
+          throw new CommandRejectedError(msg, { cause: error })
         }
         if (isUncertainError(error)) {
           throw new CommandUncertainError('Retry status is uncertain. Check your connection or retry to confirm.', { cause: error })
@@ -982,6 +1011,12 @@ export function createFirebaseWorkspace(
       throw new CommandRejectedError('The retry was cancelled.')
     }
     if (result.status === 'failed') {
+      if (result.errorCode === 'screening-blocked') {
+        throw new CommandRejectedError('This reply could not be generated. Please revise your question and try again.')
+      }
+      if (result.errorCode === 'screening-unavailable') {
+        throw new CommandRejectedError('Safety screening is temporarily unavailable. Please try again.')
+      }
       throw new CommandRejectedError('The retry attempt failed. Check the error in conversation.')
     }
   }
@@ -1022,7 +1057,7 @@ export function createFirebaseWorkspace(
     const previous = retainedEdits.has(editKey)
     retainedEdits.add(editKey)
 
-    const command = httpsCallable<Command, CommandResult>(functions, 'command', { timeout: 90000 })
+    const command = httpsCallable<Command, CommandResult>(functions, 'command', { timeout: 120000 })
     const callBounded = async (body: Command): Promise<CommandResult> => {
       const { promise: deadline, reject: rejectDeadline } = Promise.withResolvers<never>()
       const timerId = setTimeout(() => rejectDeadline(new CommandUncertainError(
@@ -1037,8 +1072,13 @@ export function createFirebaseWorkspace(
         requireAccount()
         if (error instanceof CommandUncertainError) throw error
         const details = getSafeAppErrorDetails(error)
-        if (details?.code && ['validation', 'forbidden', 'unauthenticated', 'room-busy', 'budget-exhausted', 'conflict', 'throttled', 'provider-unavailable'].includes(details.code)) {
-          throw new CommandRejectedError(details.message ?? 'This edit request was rejected. Your draft is retained.', { cause: error })
+        if (details?.code && ['validation', 'forbidden', 'unauthenticated', 'room-busy', 'budget-exhausted', 'conflict', 'throttled', 'provider-unavailable', 'screening-blocked', 'screening-unavailable'].includes(details.code)) {
+          const msg = details.code === 'screening-blocked'
+            ? (details.message ?? 'This edit could not be saved. Please revise your text and try again.')
+            : details.code === 'screening-unavailable'
+            ? (details.message ?? 'Safety screening is temporarily unavailable. Please try again.')
+            : (details.message ?? 'This edit request was rejected. Your draft is retained.')
+          throw new CommandRejectedError(msg, { cause: error })
         }
         if (isUncertainError(error)) {
           throw new CommandUncertainError('Edit status is uncertain. Check your connection or retry to confirm.', { cause: error })
@@ -1074,7 +1114,16 @@ export function createFirebaseWorkspace(
       throw new CommandRejectedError('The edit was cancelled.')
     }
     if (result.status === 'failed') {
-      throw new CommandRejectedError('The edit attempt failed.')
+      if (result.errorCode === 'screening-blocked') {
+        throw new CommandRejectedError('This edit could not be saved. Please revise your text and try again.')
+      }
+      if (result.errorCode === 'screening-unavailable') {
+        throw new CommandRejectedError('Safety screening is temporarily unavailable. Please try again.')
+      }
+      throw new CommandRejectedError('The edit attempt failed. Your draft is retained.')
+    }
+    if (result.status === 'pending' && result.version !== expectedVersion + 1) {
+      throw new CommandUncertainError('Edit status is uncertain. Content screening has not confirmed the edit; retry to check saved state.')
     }
     retainedEdits.delete(editKey)
     return result
@@ -1110,7 +1159,7 @@ export function createFirebaseWorkspace(
     const previous = retainedDeletions.has(deleteKey)
     retainedDeletions.add(deleteKey)
 
-    const command = httpsCallable<Command, CommandResult>(functions, 'command', { timeout: 90000 })
+    const command = httpsCallable<Command, CommandResult>(functions, 'command', { timeout: 120000 })
     const callBounded = async (body: Command): Promise<CommandResult> => {
       const { promise: deadline, reject: rejectDeadline } = Promise.withResolvers<never>()
       const timerId = setTimeout(() => rejectDeadline(new CommandUncertainError(

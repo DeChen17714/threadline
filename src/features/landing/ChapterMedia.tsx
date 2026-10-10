@@ -42,20 +42,22 @@ function sampleFrameTransparency(video: HTMLVideoElement): boolean {
 }
 
 export function ChapterMedia(props: ChapterMediaProps): JSX.Element {
+  const highResolution = useMediaQuery('(min-resolution: 2dppx)')
   // A source is a distinct media resource; never carry its verdict into another clip.
   return (
     <MediaSource
-      key={`${props.chapter.id}-${props.layout}`}
+      key={`${props.chapter.id}-${props.layout}-${highResolution ? '4k' : 'web'}`}
       chapter={props.chapter}
       layout={props.layout}
       enabled={props.enabled}
       className={props.className}
       loading={props.loading}
+      highResolution={highResolution}
     />
   )
 }
 
-function MediaSource({ chapter, layout, enabled, className, loading = 'eager' }: ChapterMediaProps) {
+function MediaSource({ chapter, layout, enabled, className, loading = 'eager', highResolution }: ChapterMediaProps & { readonly highResolution: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const verifiedAlpha = useRef(false)
@@ -63,7 +65,7 @@ function MediaSource({ chapter, layout, enabled, className, loading = 'eager' }:
   const [visible, setVisible] = useState(false)
   const [status, setStatus] = useState<'loading' | 'playing' | 'fallback'>('loading')
   const documentVisible = useSyncExternalStore(subscribeVisibility, pageVisible, () => false)
-  const videoSrc = `/assets/video/${chapter.id}-${layout}.webm`
+  const videoSrc = `/assets/video/${chapter.id}-${layout}${highResolution ? '-4k' : ''}.webm`
   const poster = layout === 'desktop' ? chapter.desktopPoster : chapter.mobilePoster
   const shouldPlay = enabled && visible && documentVisible && status !== 'fallback'
 

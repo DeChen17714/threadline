@@ -13,14 +13,24 @@ export const commandSchema = z.discriminatedUnion('operation', [
   z.strictObject({ requestId: uuid, operation: z.literal('getOperation'), input: z.strictObject({ operationId: z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/) }) }),
   z.strictObject({ requestId: uuid, operation: z.literal('issueInvite'), input: z.strictObject({ roomId: uuid }) }),
   z.strictObject({ requestId: uuid, operation: z.literal('revokeInvite'), input: z.strictObject({ roomId: uuid }) }),
-  z.strictObject({ requestId: uuid, operation: z.literal('previewInvite'), input: z.strictObject({ token }) }),
-  z.strictObject({ requestId: uuid, operation: z.literal('joinRoom'), input: z.strictObject({ token }) }),
+  z.strictObject({ requestId: uuid, operation: z.literal('requestJoin'), input: z.strictObject({ token }) }),
+  z.strictObject({ requestId: uuid, operation: z.literal('getJoinStatus'), input: z.strictObject({ joinRequestId: uuid }) }),
+  z.strictObject({ requestId: uuid, operation: z.literal('listJoinRequests'), input: z.strictObject({ roomId: uuid }) }),
+  z.strictObject({ requestId: uuid, operation: z.literal('decideJoin'), input: z.strictObject({ roomId: uuid, joinRequestId: uuid, decision: z.enum(['approve', 'reject']) }) }),
   z.strictObject({ requestId: uuid, operation: z.literal('deleteRoom'), input: z.strictObject({ roomId: uuid }) }),
   z.strictObject({ requestId: uuid, operation: z.literal('listPendingOperations'), input: z.strictObject({ cursor: z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/).nullable() }) }),
   z.strictObject({ requestId: uuid, operation: z.literal('resumeMaintenance'), input: z.strictObject({ operationId: z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/) }) }),
 ])
 export type Command = z.infer<typeof commandSchema>
 export type OperationStatus = 'complete' | 'pending' | 'failed' | 'cancelled'
+export type ModerationErrorCode = 'screening-blocked' | 'screening-unavailable'
+export type JoinStatus = 'pending' | 'approved' | 'rejected' | 'expired'
+export interface JoinRequestSummary {
+  readonly joinRequestId: string
+  readonly applicantUid: string
+  readonly applicantLabel: string
+  readonly expiresAt: number
+}
 export interface CommandResult {
   readonly operationId: string
   readonly status: OperationStatus
@@ -31,8 +41,11 @@ export interface CommandResult {
   readonly token?: string
   readonly tokenUnavailable?: boolean
   readonly expiresAt?: number
-  readonly room?: { readonly id: string; readonly name: string; readonly description: string; readonly memberCount: number }
+  readonly joinRequestId?: string
+  readonly joinStatus?: JoinStatus
+  readonly joinRequests?: readonly JoinRequestSummary[]
   readonly operations?: readonly { readonly operationId: string; readonly roomId: string; readonly status: OperationStatus; readonly deletedCount: number }[]
   readonly nextCursor?: string | null
   readonly deletedCount?: number
+  readonly errorCode?: ModerationErrorCode
 }

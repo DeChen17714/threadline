@@ -1,0 +1,10 @@
+{
+  "targets": {
+    "mit-app-assignment": {
+      "hosting": {
+        "primary": ["mit-app-assignment"],
+        "demo": ["threadline-demo"]
+      }
+    }
+  }
+}

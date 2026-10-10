@@ -3,8 +3,9 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { initializeApp, deleteApp } from 'firebase/app'
-import { initializeAuth, connectAuthEmulator, inMemoryPersistence } from 'firebase/auth'
+import { initializeAuth, inMemoryPersistence } from 'firebase/auth'
 import { createFirebaseAuth } from '../src/services/firebaseAuth.ts'
+import { PROJECT_ID, authOrigin, connectTestAuthEmulator } from './emulator-test-env.mjs'
 
 // This suite requires the isolated demo-threadline Auth emulator on loopback.
 globalThis.window = { setTimeout, location: { origin: 'http://127.0.0.1:5174' } }
@@ -15,7 +16,7 @@ async function fixture(t) {
   const id = randomUUID()
   const app = initializeApp({ apiKey: 'emulator-only', projectId: 'demo-threadline' }, id)
   const sdk = initializeAuth(app, { persistence: inMemoryPersistence })
-  connectAuthEmulator(sdk, 'http://127.0.0.1:9099', { disableWarnings: true })
+  connectTestAuthEmulator(sdk)
   const auth = createFirebaseAuth(sdk)
   const states = []
   const unsub = auth.subscribe(() => states.push(auth.getSnapshot()))
@@ -66,7 +67,7 @@ test('unknown-account recovery is neutral; verified reset invalidates the actual
   await auth.sendPasswordReset(`${randomUUID()}@example.test`)
   assert.equal(auth.getSnapshot().status, 'signed-out')
   await auth.sendPasswordReset(email)
-  const response = await fetch('http://127.0.0.1:9099/emulator/v1/projects/demo-threadline/oobCodes')
+  const response = await fetch(`${authOrigin}/emulator/v1/projects/${PROJECT_ID}/oobCodes`)
   assert.equal(response.ok, true)
   const { oobCodes } = await response.json()
   const action = oobCodes.find((entry) => entry.email === email && entry.requestType === 'PASSWORD_RESET')

@@ -107,16 +107,15 @@ export function useWorkspace(port: WorkspacePort, roomId: string | null) {
           message.authorId === port.member.uid &&
           message.text === command.text,
       )
-      const acceptedAsk = command.intent === 'ask-ai' &&
-        generation?.promptMessageId === command.messageId && generation.requesterId === port.member.uid
-      if (!isMatch && !acceptedAsk) return false
+      if (!isMatch) return false
 
-      if (acceptedAsk) setWindows((prev) => (prev[key] ?? liveWindow).upperSeq === null
-        ? prev : { ...prev, [key]: liveWindow })
+      if (command.intent === 'ask-ai') {
+        setWindows((prev) => (prev[key] ?? liveWindow).upperSeq === null
+          ? prev : { ...prev, [key]: liveWindow })
+      }
       if (activeRequests.current.get(key) === command.requestId) {
         activeRequests.current.delete(key)
       }
-
       setDrafts((prev) => {
         const stored = prev[key] ?? emptyDraft
         const matches = isPending
@@ -213,6 +212,7 @@ export function useWorkspace(port: WorkspacePort, roomId: string | null) {
 
       if (isStillActive) {
         setWindows((prev) => ({ ...prev, [targetKey]: liveWindow }))
+        activeRequests.current.delete(targetKey)
         setDrafts((prev) => {
           const stored = prev[targetKey] ?? emptyDraft
           if (stored.pendingCommand?.requestId !== input.requestId) return prev
@@ -234,10 +234,10 @@ export function useWorkspace(port: WorkspacePort, roomId: string | null) {
 
       const isStillActive = activeRequests.current.get(targetKey) === input.requestId
 
-
       if (!isStillActive) {
         return
       }
+      activeRequests.current.delete(targetKey)
 
       const isDefinitelyRejected = error instanceof CommandRejectedError
 
@@ -256,7 +256,7 @@ export function useWorkspace(port: WorkspacePort, roomId: string | null) {
         }
       })
     } finally {
-      if (activeRequests.current.get(targetKey) === input.requestId) {
+      if (!lifetime.active && activeRequests.current.get(targetKey) === input.requestId) {
         activeRequests.current.delete(targetKey)
       }
     }
@@ -644,6 +644,7 @@ export function useWorkspace(port: WorkspacePort, roomId: string | null) {
     conversation: decoratedConversation,
     draft: current.draft,
     pending: current.pending,
+    pendingIntent: current.pendingCommand?.intent ?? null,
     error: current.error,
     canRetry: Boolean(current.failed),
     failedText: current.failed?.text ?? null,

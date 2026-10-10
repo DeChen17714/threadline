@@ -156,6 +156,11 @@
   min-height: 44px;
 }
 
+.brandMark {
+  flex-shrink: 0;
+  display: block;
+}
+
 .brandButton:focus-visible {
   outline: 2px solid #F4B58B;
   outline-offset: 2px;

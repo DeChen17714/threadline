@@ -16,6 +16,7 @@ export interface ChatPanelProps {
   readonly draft: string
   readonly onDraftChange: (text: string) => void
   readonly pending: boolean
+  readonly pendingIntent?: MessageIntent | null
   readonly error: string | null
   readonly onSend: (intent: MessageIntent) => Promise<void>
   readonly onRetry: () => Promise<void>
@@ -58,6 +59,7 @@ export function ChatPanel({
   draft,
   onDraftChange,
   pending,
+  pendingIntent,
   error,
   onSend,
   onRetry,
@@ -208,6 +210,7 @@ export function ChatPanel({
         onDraftChange={onDraftChange}
         onSend={onSend}
         pending={pending}
+        pendingIntent={pendingIntent}
         error={error}
         onRetry={onRetry}
         canRetry={canRetry}

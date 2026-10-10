@@ -12,8 +12,10 @@ import { handleEditMessage, handleDeleteMessage } from './handlers/messageMutati
 import {
   handleIssueInvite,
   handleRevokeInvite,
-  handlePreviewInvite,
-  handleJoinRoom,
+  handleRequestJoin,
+  handleGetJoinStatus,
+  handleListJoinRequests,
+  handleDecideJoin,
 } from './handlers/invitations.js';
 import {
   handleDeleteRoom,
@@ -24,9 +26,10 @@ import { handleAskThreadline, handleRetryAiReply } from './ai/lifecycle.js';
 import { requireAiAccess, getServerAiPolicy } from './ai/policy.js';
 import { createGeminiProvider } from './ai/provider.js';
 import { handleRecoverGeneration } from './ai/recovery.js';
+import { createOpenAiModerationPort } from './moderation/provider.js';
 
 const geminiKey = defineSecret('GEMINI_API_KEY');
-
+const openaiKey = defineSecret('OPENAI_API_KEY');
 function assertHandled(value: never): never {
   void value;
   throw new HttpsError('internal', 'Unsupported operation');
@@ -38,8 +41,8 @@ export const command = onCall(
     minInstances: 0,
     maxInstances: 2,
     concurrency: 8,
-    timeoutSeconds: 90,
-    secrets: [geminiKey],
+    timeoutSeconds: 120,
+    secrets: [geminiKey, openaiKey],
     cors: allowedOrigins(),
     enforceAppCheck: !isIsolatedEmulator(),
     ...(process.env.FUNCTION_SERVICE_ACCOUNT ? { serviceAccount: process.env.FUNCTION_SERVICE_ACCOUNT } : {}),
@@ -77,9 +80,8 @@ export const command = onCall(
       });
 
       const db = getDb();
+      const moderation = createOpenAiModerationPort(openaiKey.value());
       let result: CommandResult;
-
-      // 4. Regional exhaustive dispatcher
       switch (validatedCommand.operation) {
         case 'createRoom': {
           result = await handleCreateRoom(
@@ -97,7 +99,8 @@ export const command = onCall(
             user.uid,
             user.label,
             validatedCommand.requestId,
-            validatedCommand.input
+            validatedCommand.input,
+            moderation
           );
           break;
         }
@@ -106,7 +109,8 @@ export const command = onCall(
             db,
             user.uid,
             validatedCommand.requestId,
-            validatedCommand.input
+            validatedCommand.input,
+            moderation
           );
           break;
         }
@@ -122,8 +126,16 @@ export const command = onCall(
         case 'askThreadline': {
           const policy = getServerAiPolicy();
           requireAiAccess(user.uid, validatedCommand.requestId, policy);
-          result = await handleAskThreadline(db, user.uid, user.label, validatedCommand.requestId,
-            validatedCommand.input, policy, createGeminiProvider(geminiKey.value()));
+          result = await handleAskThreadline(
+            db,
+            user.uid,
+            user.label,
+            validatedCommand.requestId,
+            validatedCommand.input,
+            policy,
+            createGeminiProvider(geminiKey.value()),
+            moderation
+          );
           break;
         }
         case 'retryAiReply': {
@@ -136,7 +148,8 @@ export const command = onCall(
             validatedCommand.requestId,
             validatedCommand.input,
             policy,
-            createGeminiProvider(geminiKey.value())
+            createGeminiProvider(geminiKey.value()),
+            moderation
           );
           break;
         }
@@ -171,8 +184,18 @@ export const command = onCall(
           );
           break;
         }
-        case 'previewInvite': {
-          result = await handlePreviewInvite(
+        case 'requestJoin': {
+          result = await handleRequestJoin(
+            db,
+            user.uid,
+            user.label,
+            validatedCommand.requestId,
+            validatedCommand.input
+          );
+          break;
+        }
+        case 'getJoinStatus': {
+          result = await handleGetJoinStatus(
             db,
             user.uid,
             validatedCommand.requestId,
@@ -180,11 +203,19 @@ export const command = onCall(
           );
           break;
         }
-        case 'joinRoom': {
-          result = await handleJoinRoom(
+        case 'listJoinRequests': {
+          result = await handleListJoinRequests(
             db,
             user.uid,
-            user.label,
+            validatedCommand.requestId,
+            validatedCommand.input
+          );
+          break;
+        }
+        case 'decideJoin': {
+          result = await handleDecideJoin(
+            db,
+            user.uid,
             validatedCommand.requestId,
             validatedCommand.input
           );

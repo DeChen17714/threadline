@@ -11,13 +11,14 @@ import { MODEL } from '../functions/dist/ai/provider.js'
 import { BUDGET_ID, RESERVATION_MICRO_USD, PRICING_EXPIRY } from '../functions/dist/ai/policy.js'
 import { handleAskThreadline, handleRetryAiReply } from '../functions/dist/ai/lifecycle.js'
 import { handleCreateRoom } from '../functions/dist/handlers/createRoom.js'
+import { PROJECT_ID } from './emulator-test-env.mjs'
 
-process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080'
-const app = initializeApp({ projectId: 'demo-threadline' }, 'threadline-setup-regressions')
+const app = initializeApp({ projectId: PROJECT_ID }, 'threadline-setup-regressions')
 const db = getFirestore(app, 'setup-regressions')
 const budgetRef = db.collection('budgets').doc(BUDGET_ID)
 const policy = { localDevelopment: true, testerUids: [] }
 const key = 'synthetic-setup-credential-not-a-real-key'
+const moderation = { async screen() { return { verdict: 'allow', policyVersion: 'controlled-test', reason: null } } }
 function controlled({ countFailure = false, generateFailure = false, countBarrier } = {}) {
   let counts = 0, generations = 0
   return {
@@ -52,13 +53,13 @@ test('clean startup enables actual Ask and author retry past 50 attempts and his
   const quota = db.collection('quotaBuckets').doc(`aiLifetime_${owner}`)
   await quota.set({ requesterId: owner, consumedAttempts: 50, reservedAttempts: 0 })
   const messageId = randomUUID()
-  const failed = await handleAskThreadline(db, owner, 'Owner', randomUUID(), { roomId, messageId, text: 'Controlled question' }, policy, controlled({ generateFailure: true }))
+  const failed = await handleAskThreadline(db, owner, 'Owner', randomUUID(), { roomId, messageId, text: 'Controlled question' }, policy, controlled({ generateFailure: true }), moderation)
   assert.equal(failed.status, 'failed')
   const room = (await db.collection('rooms').doc(roomId).get()).data()
   const provider = controlled()
   const requestId = randomUUID(), input = { roomId, promptMessageId: messageId, generationId: room.latestGenerationId }
-  assert.equal((await handleRetryAiReply(db, owner, 'Owner', requestId, input, policy, provider)).status, 'complete')
-  assert.equal((await handleRetryAiReply(db, owner, 'Owner', requestId, input, policy, provider)).status, 'complete')
+  assert.equal((await handleRetryAiReply(db, owner, 'Owner', requestId, input, policy, provider, moderation)).status, 'complete')
+  assert.equal((await handleRetryAiReply(db, owner, 'Owner', requestId, input, policy, provider, moderation)).status, 'complete')
   assert.equal(provider.generations, 1)
   assert.equal((await quota.get()).data().consumedAttempts, 52)
   const budget = (await budgetRef.get()).data()
@@ -160,8 +161,16 @@ test('credential file parsing refuses unreadable, multiple, empty and nonprivate
   try {
     assert.throws(() => readLocalSecret({ secretPath }))
     fs.writeFileSync(secretPath, `GEMINI_API_KEY="${key}"\n`, { mode: 0o600 })
+    assert.throws(() => readLocalSecret({ secretPath }))
+    fs.writeFileSync(secretPath, `# Server-only keys\nGEMINI_API_KEY="${key}"\nOPENAI_API_KEY= sk-synthetic-moderation-key \n`)
     assert.equal(readLocalSecret({ secretPath }), key)
-    for (const content of [`GEMINI_API_KEY=${key}\nGEMINI_API_KEY=${key}`, 'GEMINI_API_KEY=']) {
+    for (const content of [
+      `GEMINI_API_KEY=${key}\nGEMINI_API_KEY=${key}`,
+      'GEMINI_API_KEY=',
+      `GEMINI_API_KEY=${key}\nOPENAI_API_KEY=`,
+      `GEMINI_API_KEY=${key}\nOPENAI_API_KEY=sk-synthetic\nOPENAI_API_KEY=sk-duplicate`,
+      `GEMINI_API_KEY=${key}\nUNEXPECTED_API_KEY=sk-synthetic`,
+    ]) {
       fs.writeFileSync(secretPath, content)
       assert.throws(() => readLocalSecret({ secretPath }), error => !error.message.includes(key))
     }
